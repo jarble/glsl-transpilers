@@ -5,8 +5,8 @@
 	</head>
 <body onload>
 	
-<h1><a href="https://github.com/jarble/glsl-to-typescript">GLSL to TypeScript</a></h1>
-<h2>TypeScript input:</h2>
+<h1><a href="https://github.com/jarble/glsl-to-java">GLSL to Java</a></h1>
+<h2>GLSL input:</h2>
 <textarea id="my-input" cols="40" rows="5" placeholder="Type something here"></textarea>
 <h2>GLSL output:</h2>
 <textarea id="outputText" readonly cols="40" rows="5" placeholder="See output here"></textarea>
@@ -37,7 +37,7 @@ let timeout = null;
 
 
 
-fetch ("glsl_to_typescript.peggy")
+fetch ("glsl_to_java.peggy")
 .then(x => x.text())
 .then(function(y){
 	const parser = peggy.generate(y);
