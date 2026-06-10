@@ -1,13 +1,15 @@
 {
 const typeMap = {
- float:"number",
- int:"number",
- uint:"number",
+ float:"float",
+ int:"int",
+ uint:"int",
  bool:"boolean",
 
- vec2:"[number, number]",
- vec3:"[number, number, number]",
- vec4:"[number, number, number, number]"
+ vec2:"Vec2",
+ vec3:"Vec3",
+ vec4:"Vec4",
+
+ void:"void"
 };
 
 const builtinMap = {
@@ -26,9 +28,7 @@ const builtinMap = {
  sin:"Math.sin",
  sqrt:"Math.sqrt",
  tan:"Math.tan",
- sign:"Math.sign",
  round:"Math.round",
- trunc:"Math.trunc",
 
  length:"length",
  normalize:"normalize",
@@ -49,10 +49,12 @@ function mapFunc(f){
 }
 
 function emitComment(c){
- return c+"\n";
+ return c + "\n";
 }
 }
 
+/* ===================================================== */
+/* entry */
 /* ===================================================== */
 
 Start
@@ -61,16 +63,13 @@ _
 items:(TopLevel (_ TopLevel)*)?
 _
 {
- const all =
- items
- ? [items[0]].concat(
-     items[1].map(x=>x[1])
-   )
- : [];
-
- return all.join("\n");
+ return items
+ ? [items[0]].concat(items[1].map(x=>x[1])).join("\n")
+ : "";
 }
 
+/* ===================================================== */
+/* top level */
 /* ===================================================== */
 
 TopLevel
@@ -116,9 +115,7 @@ Block
 CommentStmt
 =
 c:Comment
-{
- return emitComment(c);
-}
+{ return emitComment(c); }
 
 Comment
 =
@@ -128,17 +125,11 @@ MultiLineComment
 
 SingleLineComment
 =
-c:$("//" [^\r\n]*)
-{
- return c;
-}
+$("//" [^\r\n]*)
 
 MultiLineComment
 =
-c:$("/*" (!"*/" .)* "*/")
-{
- return c;
-}
+$("/*" (!"*/" .)* "*/")
 
 /* ===================================================== */
 /* structs */
@@ -158,18 +149,13 @@ _
 _
 ";"?
 {
- const fs =
- fields
- ? [fields[0]].concat(
-     fields[1].map(x=>x[1])
-   )
+ const fs = fields
+ ? [fields[0]].concat(fields[1].map(x=>x[1]))
  : [];
 
- return (
-`interface ${name} {
+ return `class ${name} {
 ${fs.join("\n")}
-}`
- );
+}`;
 }
 
 StructField
@@ -180,7 +166,7 @@ id:Identifier
 _
 ";"
 {
- return `${id}: ${mapType(t)};`;
+ return `${mapType(t)} ${id};`;
 }
 
 /* ===================================================== */
@@ -196,48 +182,28 @@ __
 id:Identifier
 arr:ArraySuffix?
 _
-init:(
- "="
- _
- e:Expression
- { return e; }
-)?
+init:("=" _ e:Expression { return e; })?
 _
 ";"
 {
- const tsType =
- arr
- ? mapType(t)+"[]"
- : mapType(t);
+ const ty = arr ? mapType(t)+"[]" : mapType(t);
 
- return (
-   "let "+
-   id+
-   ": "+
-   tsType+
-   (init ? " = "+init : "")+
-   ";"
- );
+ return ty + " " + id + (init ? " = " + init : "") + ";";
 }
 
 StorageQualifier
 =
 "uniform"
-/
-"attribute"
-/
-"varying"
-/
-"const"
+/ "attribute"
+/ "varying"
+/ "const"
 
 /* ===================================================== */
-/* vars */
+/* variables */
 /* ===================================================== */
 
-VarDecl
+Declarator
 =
-t:Type
-__
 id:Identifier
 arr:ArraySuffix?
 _
@@ -247,22 +213,44 @@ init:(
  e:Expression
  { return e; }
 )?
+{
+ return {
+  id,
+  arr,
+  init
+ };
+}
+
+VarDecl
+=
+t:Type
+__
+head:Declarator
+tail:(_ "," _ Declarator)*
 _
 ";"
 {
- const tsType =
- arr
- ? mapType(t)+"[]"
- : mapType(t);
+ const decls =
+  [head].concat(
+   tail.map(x => x[3])
+  );
 
- return (
- "let "+
- id+
- ": "+
- tsType+
- (init ? " = "+init : "")+
- ";"
- );
+ const ty = mapType(t);
+
+ return decls.map(d => {
+   const dtype =
+     d.arr
+     ? ty + "[]"
+     : ty;
+
+   return (
+     dtype +
+     " " +
+     d.id +
+     (d.init ? " = " + d.init : "") +
+     ";"
+   );
+ }).join("\n");
 }
 
 /* ===================================================== */
@@ -283,12 +271,10 @@ _
 _
 body:Block
 {
- return (
-`function ${name}(
-${params ? params.join(",\n") : ""}
-): ${mapType(ret)}
-${body}`
- );
+ return `${mapType(ret)} ${name}(
+${params ? params.join(", ") : ""}
+)
+${body}`;
 }
 
 ParamList
@@ -296,9 +282,7 @@ ParamList
 head:Param
 tail:(_ "," _ Param)*
 {
- return [head].concat(
- tail.map(x=>x[3])
- );
+ return [head].concat(tail.map(x=>x[3]));
 }
 
 Param
@@ -308,17 +292,17 @@ t:Type
 __
 id:Identifier
 {
- return `${id}: ${mapType(t)}`;
+ return `${mapType(t)} ${id}`;
 }
 
 ParameterQualifier
 =
 "inout"
-/
-"in"
-/
-"out"
+/ "in"
+/ "out"
 
+/* ===================================================== */
+/* blocks */
 /* ===================================================== */
 
 Block
@@ -329,16 +313,15 @@ stmts:(Statement (_ Statement)*)?
 _
 "}"
 {
- const s =
- stmts
- ? [stmts[0]].concat(
-     stmts[1].map(x=>x[1])
-   )
+ const s = stmts
+ ? [stmts[0]].concat(stmts[1].map(x=>x[1]))
  : [];
 
- return "{\n"+s.join("\n")+"\n}";
+ return "{\n" + s.join("\n") + "\n}";
 }
 
+/* ===================================================== */
+/* control flow */
 /* ===================================================== */
 
 IfStmt
@@ -351,16 +334,12 @@ cond:Expression
 _
 ")"
 _
-then:Block
-elsePart:ElseClause?
+thenStmt:Statement
+elsePart:(_ "else" _ elseStmt:Statement { return elseStmt; })?
 {
- return (
- "if ("+
- cond+
- ") "+
- then+
- (elsePart?(" "+elsePart):"")
- );
+ return "if(" + cond + ") " +
+        thenStmt +
+        (elsePart ? " else " + elsePart : "");
 }
 
 ElseClause
@@ -368,12 +347,10 @@ ElseClause
 _
 "else"
 _
-x:(IfStmt / Block)
+x:Statement
 {
- return "else "+x;
+ return "else " + x;
 }
-
-/* ===================================================== */
 
 WhileStmt
 =
@@ -385,16 +362,16 @@ cond:Expression
 _
 ")"
 _
-body:Block
+body:Statement
 {
- return `while (${cond}) ${body}`;
+ return `while(${cond}) ${body}`;
 }
 
 DoWhileStmt
 =
 "do"
 _
-body:Block
+body:Statement
 _
 "while"
 _
@@ -406,12 +383,8 @@ _
 _
 ";"
 {
- return `do ${body} while (${cond});`;
+ return `do ${body} while(${cond});`;
 }
-
-/* ===================================================== */
-/* fixed for loops */
-/* ===================================================== */
 
 ForStmt
 =
@@ -431,18 +404,9 @@ update:ForUpdate?
 _
 ")"
 _
-body:Block
+body:Statement
 {
- return (
- "for("+
- (init||"")+
- "; "+
- (cond||"")+
- "; "+
- (update||"")+
- ") "+
- body
- );
+ return "for(" + (init||"") + "; " + (cond||"") + "; " + (update||"") + ") " + body;
 }
 
 ForInit
@@ -457,47 +421,40 @@ ForUpdate
 =
 AssignmentExpr
 /
+Postfix
+/
 Expression
-
 VarDeclInline
 =
 t:Type
 __
-id:Identifier
-arr:ArraySuffix?
-_
-init:(
- "="
- _
- e:Expression
- { return e; }
-)?
+head:Declarator
+tail:(_ "," _ Declarator)*
 {
- const tsType =
- arr
- ? mapType(t)+"[]"
- : mapType(t);
+ const decls =
+  [head].concat(
+   tail.map(x => x[3])
+  );
 
- return (
- "let "+
- id+
- ": "+
- tsType+
- (init ? " = "+init : "")
- );
+ const ty = mapType(t);
+
+ return decls.map(d => {
+   const dtype =
+     d.arr
+     ? ty + "[]"
+     : ty;
+
+   return (
+     dtype +
+     " " +
+     d.id +
+     (d.init ? " = " + d.init : "")
+   );
+ }).join(", ");
 }
 
-AssignmentExpr
-=
-lhs:Assignable
-_
-op:AssignOp
-_
-rhs:Expression
-{
- return lhs+" "+op+" "+rhs;
-}
-
+/* ===================================================== */
+/* switch */
 /* ===================================================== */
 
 SwitchStmt
@@ -515,11 +472,9 @@ _
 cases:(CaseClause _)*
 "}"
 {
- return (
- "switch("+expr+"){\n"+
- cases.map(x=>x[0]).join("")+
- "\n}"
- );
+ return "switch(" + expr + "){\n" +
+ cases.map(x => x[0]).join("") +
+ "\n}";
 }
 
 CaseClause
@@ -531,14 +486,8 @@ v:Expression
 _
 body:((Statement _)+)?
 {
- return (
- "case "+
- v+
- ":\n"+
- (body
- ? body.map(x=>x[0]).join("")
- : "")
- );
+ return "case " + v + ":\n" +
+ (body ? body.map(x => x[0]).join("") : "");
 }
 
 /
@@ -547,14 +496,12 @@ body:((Statement _)+)?
 _
 body:((Statement _)+)?
 {
- return (
- "default:\n"+
- (body
- ? body.map(x=>x[0]).join("")
- : "")
- );
+ return "default:\n" +
+ (body ? body.map(x => x[0]).join("") : "");
 }
 
+/* ===================================================== */
+/* return / assignment */
 /* ===================================================== */
 
 ReturnStmt
@@ -565,7 +512,7 @@ expr:Expression?
 _
 ";"
 {
- return "return "+(expr||"")+";";
+ return "return " + (expr||"") + ";";
 }
 
 AssignmentStmt
@@ -573,47 +520,56 @@ AssignmentStmt
 e:AssignmentExpr
 _
 ";"
+{ return e + ";"; }
+
+AssignmentExpr
+=
+lhs:Assignable
+_
+op:AssignOp
+_
+rhs:Expression
 {
- return e+";";
+ return lhs + " " + op + " " + rhs;
 }
 
 AssignOp
 =
 "+="
-/
-"-="
-/
-"*="
-/
-"/="
-/
-"="
-/
-"&="
-/
-"|="
-/
-"^="
-/
-"<<="
-/
-">>="
+/ "-="
+/ "*="
+/ "/="
+/ "="
 
 /* ===================================================== */
-/* expressions */
+/* EXPRESSIONS */
 /* ===================================================== */
 
-Expression = LogicalOr
+Expression = Ternary
+
+Ternary
+=
+cond:LogicalOr
+_
+"?"
+_
+ifTrue:Expression
+_
+":"
+_
+ifFalse:Expression
+{
+ return cond + " ? " + ifTrue + " : " + ifFalse;
+}
+
+/ LogicalOr
 
 LogicalOr
 =
 l:LogicalAnd
 tail:(_ "||" _ LogicalAnd)*
 {
- return tail.reduce(
- (a,t)=>a+" || "+t[3],
- l
- );
+ return tail.reduce((a,t)=>a+" || "+t[3], l);
 }
 
 LogicalAnd
@@ -621,10 +577,7 @@ LogicalAnd
 l:Comparison
 tail:(_ "&&" _ Comparison)*
 {
- return tail.reduce(
- (a,t)=>a+" && "+t[3],
- l
- );
+ return tail.reduce((a,t)=>a+" && "+t[3], l);
 }
 
 Comparison
@@ -632,35 +585,24 @@ Comparison
 l:AddSub
 tail:(_ CompOp _ AddSub)*
 {
- return tail.reduce(
- (a,t)=>a+" "+t[1]+" "+t[3],
- l
- );
+ return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
 }
 
 CompOp
 =
 "=="
-/
-"!="
-/
-"<="
-/
-">="
-/
-"<"
-/
-">"
+/ "!="
+/ "<="
+/ ">="
+/ "<"
+/ ">"
 
 AddSub
 =
 l:MulDiv
 tail:(_ ("+"/"-") _ MulDiv)*
 {
- return tail.reduce(
- (a,t)=>a+" "+t[1]+" "+t[3],
- l
- );
+ return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
 }
 
 MulDiv
@@ -668,14 +610,30 @@ MulDiv
 l:Unary
 tail:(_ ("*" / "/" / "%") _ Unary)*
 {
- return tail.reduce(
- (a,t)=>a+" "+t[1]+" "+t[3],
- l
- );
+ return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
 }
+
+Postfix
+=
+base:Primary
+op:("++" / "--")
+{
+ return base + op;
+}
+
+/
+Primary
 
 Unary
 =
+"++"
+_ v:Unary { return "++"+v; }
+
+/
+"--"
+_ v:Unary { return "--"+v; }
+
+/
 "!"
 _ v:Unary { return "!"+v; }
 
@@ -684,38 +642,17 @@ _ v:Unary { return "!"+v; }
 _ v:Unary { return "-"+v; }
 
 /
-Primary
-
-/* ===================================================== */
+Postfix
 
 Primary
 =
 "true" { return "true"; }
-
-/
-"false" { return "false"; }
-
-/
-"("
-_
-e:Expression
-_
-")"
-{
- return "("+e+")";
-}
-
-/
-VectorConstructor
-
-/
-FuncCall
-
-/
-Assignable
-
-/
-Number
+/ "false" { return "false"; }
+/ "(" _ e:Expression _ ")" { return "(" + e + ")"; }
+/ VectorConstructor
+/ FuncCall
+/ Assignable
+/ Number
 
 VectorConstructor
 =
@@ -727,9 +664,7 @@ args:ArgList?
 _
 ")"
 {
- return "["+
- (args ? args.join(", ") : "")+
- "]";
+ return "new " + mapType(name) + "(" + (args ? args.join(", ") : "") + ")";
 }
 
 FuncCall
@@ -742,12 +677,7 @@ args:ArgList?
 _
 ")"
 {
- return (
- mapFunc(name)+
- "("+
- (args ? args.join(", ") : "")+
- ")"
- );
+ return mapFunc(name) + "(" + (args ? args.join(", ") : "") + ")";
 }
 
 ArgList
@@ -755,11 +685,11 @@ ArgList
 head:Expression
 tail:(_ "," _ Expression)*
 {
- return [head].concat(
- tail.map(x=>x[3])
- );
+ return [head].concat(tail.map(x=>x[3]));
 }
 
+/* ===================================================== */
+/* assignables */
 /* ===================================================== */
 
 Assignable
@@ -767,86 +697,51 @@ Assignable
 base:Identifier
 tail:(_ AccessPart)*
 {
- return tail.reduce(
- (acc,t)=>{
- const p=t[1];
-
- if(p.type==="member")
- return acc+"."+p.name;
-
- return acc+"["+p.index+"]";
+ return tail.reduce((acc,t)=>{
+  const p = t[1];
+  return p.type === "member"
+   ? acc + "." + p.name
+   : acc + "[" + p.index + "]";
  }, base);
 }
 
 AccessPart
 =
-"."
-name:Identifier
-{
- return {
- type:"member",
- name
- };
-}
+"." name:Identifier { return {type:"member", name}; }
 
 /
-"["
-_
-idx:Expression
-_
-"]"
-{
- return {
- type:"index",
- index:idx
- };
-}
-
-/* ===================================================== */
+"[" _ idx:Expression _ "]"
+{ return {type:"index", index:idx}; }
 
 ExprStmt
 =
-expr:Expression
-_
+expr:Expression _
 ";"
-{
- return expr+";";
-}
+{ return expr + ";"; }
 
+/* ===================================================== */
+/* types */
 /* ===================================================== */
 
 Type
 =
-base:BaseType
-{
- return base;
-}
+BaseType
 
 BaseType
 =
 "float"
-/
-"int"
-/
-"uint"
-/
-"bool"
-/
-"vec2"
-/
-"vec3"
-/
-"vec4"
-/
-"void"
-/
-Identifier
+/ "int"
+/ "uint"
+/ "bool"
+/ "vec2"
+/ "vec3"
+/ "vec4"
+/ "void"
+/ Identifier
 
 ArraySuffix
 =
-"["
-_
-"]"
+"[" _ "]"
 
 Identifier
 =
@@ -854,7 +749,30 @@ $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
 =
-$([0-9]+ ("." [0-9]+)?)
+$(
+    (
+      [0-9]+ "." [0-9]*
+    / "." [0-9]+
+    / [0-9]+
+    )
+    ([eE] [+\-]? [0-9]+)?
+    [fFuU]?
+)
 
-_=[ \t\r\n]*
-__=[ \t\r\n]+
+/* ===================================================== */
+/* whitespace */
+/* ===================================================== */
+
+_
+=
+(
+    [ \t\r\n]
+  / Comment
+)*
+
+__
+=
+(
+    [ \t\r\n]
+  / Comment
+)+
