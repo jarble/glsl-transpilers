@@ -5,10 +5,17 @@
 	</head>
 <body onload>
 	
-<h1><a href="https://github.com/jarble/glsl-to-java">GLSL to Java</a></h1>
+<h1><a href="https://github.com/jarble/glsl-to-java">GLSL Translator</a></h1>
 <h2>GLSL input:</h2>
 <textarea id="my-input" cols="40" rows="5" placeholder="Type something here"></textarea>
-<h2>GLSL output:</h2>
+<h2>Target language:</h2>
+<select id="target-language">
+	<option value="java">Java</option>
+	<option value="cpp">C++</option>
+	<option value="csharp">C#</option>
+	<option value="zig">Zig</option>
+</select>
+<h2>Translated output:</h2>
 <textarea id="outputText" readonly cols="40" rows="5" placeholder="See output here"></textarea>
 </label>
 <p>You can test the compiled output on <a href="https://www.shadertoy.com/new">Shadertoy.</a></p>
@@ -31,37 +38,85 @@ function updateText(){
 }
 	
 let input = document.getElementById('my-input');
+let targetLanguage = document.getElementById('target-language');
+let output = document.getElementById('outputText');
+let parserCache = {};
+let activeParser = null;
 
 // Init a timeout variable to be used below
 let timeout = null;
 
+const grammarFiles = {
+	java: "glsl_to_java.peggy",
+	cpp: "glsl_to_cpp.peggy",
+	csharp: "glsl_to_csharp.peggy",
+	zig: "glsl_to_zig.peggy"
+};
 
-
-fetch ("glsl_to_java.peggy")
-.then(x => x.text())
-.then(function(y){
-	const parser = peggy.generate(y);
-		//get hash
-if(window.location.hash){
-	input.value = decodeURI(window.location.hash).substring(1,window.location.hash.length);
-	document.getElementById("outputText").value = parser.parse(input.value);
+function resizeTextarea(el) {
+	el.style.height = "auto";
+	el.style.height = (el.scrollHeight) + "px";
 }
 
+function translateInput() {
+	if (!activeParser) {
+		return;
+	}
+
+	try {
+		output.value = input.value ? activeParser.parse(input.value) : "";
+	} catch (err) {
+		output.value = err.message;
+	}
+
+	window.location.hash = "#"+encodeURI(input.value);
+	resizeTextarea(output);
+}
+
+function loadTargetLanguage(language) {
+	const grammarFile = grammarFiles[language];
+
+	if (parserCache[language]) {
+		activeParser = parserCache[language];
+		translateInput();
+		return;
+	}
+
+	fetch(grammarFile)
+	.then(x => x.text())
+	.then(function(y){
+		activeParser = peggy.generate(y);
+		parserCache[language] = activeParser;
+		translateInput();
+	})
+	.catch(function(err){
+		output.value = err.message;
+		resizeTextarea(output);
+	});
+}
+
+//get hash
+if(window.location.hash){
+	input.value = decodeURI(window.location.hash).substring(1,window.location.hash.length);
+	resizeTextarea(input);
+}
 
 // Listen for keystroke events
 input.addEventListener('keyup', function (e) {
-    // Clear the timeout if it has already been set.
-    // This will prevent the previous task from executing
-    // if it has been less than <MILLISECONDS>
-    clearTimeout(timeout);
+	// Clear the timeout if it has already been set.
+	// This will prevent the previous task from executing
+	// if it has been less than <MILLISECONDS>
+	clearTimeout(timeout);
 
-    // Make a new timeout set to go off in 1000ms (1 second)
-    timeout = setTimeout(function () {
-        document.getElementById("outputText").value = parser.parse(input.value);
-	    window.location.hash = "#"+encodeURI(input.value);
-    }, 1000);
+	// Make a new timeout set to go off in 1000ms (1 second)
+	timeout = setTimeout(translateInput, 1000);
 });
+
+targetLanguage.addEventListener('change', function () {
+	loadTargetLanguage(targetLanguage.value);
 });
+
+loadTargetLanguage(targetLanguage.value);
 
 
 
