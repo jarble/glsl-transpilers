@@ -1,5 +1,5 @@
-# GLSL to Java
- [A GLSL-to-Java compiler](https://jarble.github.io/glsl-to-java/glsl_to_java.html)
+# GLSL Transpiler
+ [A universal translator for GLSL](https://jarble.github.io/glsl-transpilers/glsl_transpilers.html)
 
 Still a work-in-progress.
 ## GLSL input:
