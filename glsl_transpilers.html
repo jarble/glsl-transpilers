@@ -14,11 +14,12 @@
 	<option value="cpp">C++</option>
 	<option value="csharp">C#</option>
 	<option value="wgsl">WGSL</option>
-	<option value="lean">lean</option>
+	<option value="lean">Lean</option>
 	<option value="prolog">Prolog</option>
 	<option value="smtlib">SMT-LIB</option>
 	<option value="clips">CLIPS</option>
 	<option value="zig">Zig</option>
+	<option value="haskell">Haskell</option>
 </select>
 <h2>Translated output:</h2>
 <textarea id="outputText" readonly cols="40" rows="5" placeholder="See output here"></textarea>
@@ -51,17 +52,7 @@ let activeParser = null;
 // Init a timeout variable to be used below
 let timeout = null;
 
-const grammarFiles = {
-	java: "glsl_to_java.peggy",
-	cpp: "glsl_to_cpp.peggy",
-	csharp: "glsl_to_csharp.peggy",
-	prolog: "glsl_to_prolog.peggy",
-	lean: "glsl_to_lean.peggy",
-	haskell: "glsl_to_haskell.peggy",
-	smtlib: "glsl_to_smtlib.peggy",
-	zig: "glsl_to_zig.peggy",
-	clips: "glsl_to_clips.peggy"
-};
+function grammarFiles(language){return "glsl_to"+language+".peggy";}
 
 function resizeTextarea(el) {
 	el.style.height = "auto";
@@ -84,7 +75,7 @@ function translateInput() {
 }
 
 function loadTargetLanguage(language) {
-	const grammarFile = grammarFiles[language];
+	const grammarFile = grammarFiles(language);
 
 	if (parserCache[language]) {
 		activeParser = parserCache[language];
