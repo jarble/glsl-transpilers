@@ -5,7 +5,7 @@
 	</head>
 <body onload>
 	
-<h1><a href="https://github.com/jarble/glsl-to-java">GLSL Translator</a></h1>
+<h1><a href="https://github.com/jarble/glsl-transpilers">GLSL Transpiler</a></h1>
 <h2>GLSL input:</h2>
 <textarea id="my-input" cols="40" rows="5" placeholder="Type something here"></textarea>
 <h2>Target language:</h2>
@@ -13,6 +13,11 @@
 	<option value="java">Java</option>
 	<option value="cpp">C++</option>
 	<option value="csharp">C#</option>
+	<option value="wgsl">WGSL</option>
+	<option value="lean">lean</option>
+	<option value="prolog">Prolog</option>
+	<option value="smtlib">SMT-LIB</option>
+	<option value="clips">CLIPS</option>
 	<option value="zig">Zig</option>
 </select>
 <h2>Translated output:</h2>
@@ -50,7 +55,12 @@ const grammarFiles = {
 	java: "glsl_to_java.peggy",
 	cpp: "glsl_to_cpp.peggy",
 	csharp: "glsl_to_csharp.peggy",
-	zig: "glsl_to_zig.peggy"
+	prolog: "glsl_to_prolog.peggy",
+	lean: "glsl_to_lean.peggy",
+	haskell: "glsl_to_haskell.peggy",
+	smtlib: "glsl_to_smtlib.peggy",
+	zig: "glsl_to_zig.peggy",
+	clips: "glsl_to_clips.peggy"
 };
 
 function resizeTextarea(el) {
