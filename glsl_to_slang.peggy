@@ -26,30 +26,22 @@
     return typeMap[t] || t;
   }
 
-  // Intercepts built-in GLSL variables and constants
   function mapVariable(name) {
-    // Slang generally handles SV_ semantics internally depending on the target,
-    // but for raw translation, we map them purely or leave them untouched.
     const builtinVars = {
       // Add any specific GLSL -> Slang system value mappings here if needed
     };
     return builtinVars[name] || name;
   }
 
-  // Intercepts the function name and its arguments to map GLSL -> Slang
   function mapFuncCall(name, args) {
     args = args || [];
     const argStr = args.join(", ");
 
-    // Slang shares HLSL intrinsics. Some GLSL names differ and must be remapped.
     switch(name) {
       case "mix": return `lerp(${argStr})`;
       case "fract": return `frac(${argStr})`;
       case "inversesqrt": return `rsqrt(${argStr})`;
       case "mod": return `fmod(${argStr})`;
-      
-      // Unmapped functions (sin, cos, dot, cross, normalize, clamp, etc.) 
-      // pass through naturally as they share names in Slang/HLSL.
       default: return `${name}(${argStr})`;
     }
   }
@@ -80,6 +72,8 @@ Start
 
 TopLevel
   =
+  PreprocessorDirective
+  /
   CommentStmt
   /
   StructDecl
@@ -92,6 +86,8 @@ TopLevel
 
 Statement
   =
+  PreprocessorDirective
+  /
   CommentStmt
   /
   VarDecl
@@ -115,8 +111,14 @@ Statement
   Block
 
 /* ===================================================== */
-/* comments */
+/* preprocessor & comments */
 /* ===================================================== */
+
+PreprocessorDirective
+  =
+  // Matches `#` directives, properly ignoring line continuations "\"
+  directive:$([ \t]* "#" ( "\\" . / [^\r\n] )*)
+  { return directive; }
 
 CommentStmt
   =
@@ -179,10 +181,11 @@ StructField
   t:Type
   __
   id:Identifier
+  arr:ArraySuffix?
   _
   ";"
   {
-    return `${mapType(t)} ${id};`;
+    return `${mapType(t)} ${id}${arr || ""};`;
   }
 
 /* ===================================================== */
@@ -203,8 +206,7 @@ GlobalDecl
   ";"
   {
     const prefix = qual ? qual + " " : "";
-    const ty = arr ? mapType(t)+"[]" : mapType(t);
-    return prefix + ty + " " + id + (init ? " = " + init : "") + ";";
+    return prefix + mapType(t) + " " + id + (arr ? arr : "") + (init ? " = " + init : "") + ";";
   }
 
 StorageQualifier
@@ -232,7 +234,7 @@ Declarator
   {
     return {
       id,
-      arr,
+      arr: arr || "",
       init
     };
   }
@@ -254,8 +256,7 @@ VarDecl
     const ty = mapType(t);
 
     return decls.map(d => {
-      const dtype = d.arr ? ty + "[]" : ty;
-      return dtype + " " + d.id + (d.init ? " = " + d.init : "") + ";";
+      return ty + " " + d.id + d.arr + (d.init ? " = " + d.init : "") + ";";
     }).join("\n");
   }
 
@@ -294,9 +295,10 @@ Param
   t:Type
   __
   id:Identifier
+  arr:ArraySuffix?
   {
     const prefix = qual ? qual[0] + " " : "";
-    return `${prefix}${mapType(t)} ${id}`;
+    return `${prefix}${mapType(t)} ${id}${arr || ""}`;
   }
 
 ParameterQualifier
@@ -430,8 +432,7 @@ VarDeclInline
     const ty = mapType(t);
 
     return decls.map(d => {
-      const dtype = d.arr ? ty + "[]" : ty;
-      return dtype + " " + d.id + (d.init ? " = " + d.init : "");
+      return ty + " " + d.id + d.arr + (d.init ? " = " + d.init : "");
     }).join(", ");
   }
 
@@ -623,7 +624,7 @@ ArrayConstructor
   =
   t:BaseType
   _
-  "[" _ "]"
+  "[" _ size:Expression? _ "]"
   _
   "("
   _
@@ -631,6 +632,7 @@ ArrayConstructor
   _
   ")"
   {
+    // Strips out the `float[3]` / `float[]` prefix, translating into a native initializer list
     return "{ " + (args ? args.join(", ") : "") + " }";
   }
 
@@ -718,7 +720,8 @@ BaseType
   / "void"
   / Identifier
 
-ArraySuffix = "[" _ "]"
+// Parses expressions inside brackets so sizes like [3], [mySize], or [] are handled correctly
+ArraySuffix = "[" _ e:Expression? _ "]" { return "[" + (e ? e : "") + "]"; }
 
 Identifier = $([a-zA-Z_][a-zA-Z0-9_]*)
 
