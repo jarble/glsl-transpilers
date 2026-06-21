@@ -1,15 +1,15 @@
 {
   const typeMap = {
-    float: "float",
-    int: "int",
-    uint: "uint",
+    float: "f32",
+    int: "i32",
+    uint: "u32",
     bool: "bool",
-    vec2: "glm::vec2",
-    vec3: "glm::vec3",
-    vec4: "glm::vec4",
-    mat2: "glm::mat2",
-    mat3: "glm::mat3",
-    mat4: "glm::mat4",
+    vec2: "vec2<f32>",
+    vec3: "vec3<f32>",
+    vec4: "vec4<f32>",
+    mat2: "mat2x2<f32>",
+    mat3: "mat3x3<f32>",
+    mat4: "mat4x4<f32>",
     void: "void"
   };
 
@@ -17,22 +17,12 @@
     return typeMap[t] || t;
   }
 
-  const builtinMap = {
-    abs: "std::abs", acos: "std::acos", asin: "std::asin", atan: "std::atan",
-    ceil: "std::ceil", cos: "std::cos", exp: "std::exp", floor: "std::floor",
-    log: "std::log", max: "std::max", min: "std::min", pow: "std::pow",
-    sin: "std::sin", sqrt: "std::sqrt", tan: "std::tan", round: "std::round",
-    clamp: "glm::clamp", length: "glm::length", normalize: "glm::normalize",
-    dot: "glm::dot", cross: "glm::cross", mix: "glm::mix",
-    step: "glm::step", smoothstep: "glm::smoothstep"
-  };
-
+  // WGSL natively shares most of GLSL's built-in math function names
   function mapFuncCall(name, argsStr) {
     if (typeMap[name]) {
         return typeMap[name] + "(" + argsStr + ")";
     }
-    const func = builtinMap[name] || name;
-    return func + "(" + argsStr + ")";
+    return name + "(" + argsStr + ")";
   }
 }
 
@@ -46,9 +36,43 @@ Start
   }
 
 TopLevel
-  = FuncDecl
+  = StructDecl
+  / FuncDecl
   / VarDecl
   / Comment
+
+/* =====================================================
+   // Structs
+   ===================================================== */
+
+StructDecl
+  = "struct" __ name:Identifier _ "{" _ fields:StructFields _ "}" tail:(_ Identifier)? _ ";" {
+      // WGSL structs do not have trailing semicolons
+      let res = "struct " + name + " {\n" + fields + "\n}";
+      // Handle immediate instantiation: struct Light { ... } myLight;
+      if (tail) {
+          res += "\nvar " + tail[1] + ": " + name + ";";
+      }
+      return res;
+  }
+
+StructFields
+  = fields:(StructField _)* {
+      return fields.map(f => f[0]).join("\n");
+  }
+
+StructField
+  = c:Comment { 
+      return c.split('\n').map(line => "    " + line).join('\n'); 
+  }
+  / type:Type __ name:Identifier array:ArraySuffix? _ ";" {
+      let wgslType = mapType(type);
+      if (array !== null) {
+          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
+      }
+      // WGSL fields are comma-separated
+      return "    " + name + ": " + wgslType + ",";
+  }
 
 /* =====================================================
    // Functions & Parameters
@@ -57,7 +81,9 @@ TopLevel
 FuncDecl
   = type:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:Statements _ "}" {
       const p = params ? params : "";
-      return mapType(type) + " " + name + "(" + p + ") {\n" + body + "\n}";
+      const retType = mapType(type);
+      const retStr = retType === "void" ? "" : " -> " + retType;
+      return "fn " + name + "(" + p + ")" + retStr + " {\n" + body + "\n}";
   }
 
 ParamList
@@ -67,11 +93,14 @@ ParamList
 
 ParamDecl
   = mod:("inout" / "out" / "in")? _ type:Type __ name:Identifier array:ArraySuffix? {
-      let t = mapType(type);
-      if (mod === "inout" || mod === "out") {
-          t += "&";
+      let wgslType = mapType(type);
+      if (array !== null) {
+          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
       }
-      return t + " " + name + (array ? array : "");
+      if (mod === "inout" || mod === "out") {
+          wgslType = "ptr<function, " + wgslType + ">";
+      }
+      return name + ": " + wgslType;
   }
 
 /* =====================================================
@@ -80,13 +109,11 @@ ParamDecl
 
 Statements
   = stmts:(Statement _)* {
-      // Joins all statements (and comments) securely with newlines
       return stmts.map(s => s[0]).join("\n");
   }
 
 Statement
   = c:Comment { 
-      // Safely split block comments to ensure proper indentation for every line
       return c.split('\n').map(line => "    " + line).join('\n'); 
   }
   / v:VarDecl { return "    " + v; }
@@ -103,7 +130,11 @@ ExprStmt
 
 VarDecl
   = type:Type __ name:Identifier array:ArraySuffix? _ init:("=" _ Initializer)? _ ";" {
-      let decl = mapType(type) + " " + name + (array ? array : "");
+      let wgslType = mapType(type);
+      if (array !== null) {
+          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
+      }
+      let decl = "var " + name + ": " + wgslType;
       if (init) {
           decl += " = " + init[2];
       }
@@ -112,7 +143,7 @@ VarDecl
 
 ArraySuffix
   = "[" _ size:Expression? _ "]" {
-      return "[" + (size ? size : "") + "]";
+      return size ? size : "";
   }
 
 Initializer
@@ -120,10 +151,10 @@ Initializer
 
 ArrayInit
   = type:Type? _ "[]" _ "(" _ args:ArgList _ ")" {
-      return "{" + args + "}";
+      return "array(" + args + ")";
   }
   / "{" _ args:ArgList _ "}" {
-      return "{" + args + "}";
+      return "array(" + args + ")";
   }
 
 /* =====================================================
@@ -179,9 +210,13 @@ Number
       [0-9]+ "." [0-9]*
     / "." [0-9]+
     / [0-9]+
-  ) suffix:[fF]? {
+  ) suffix:[fFuU]? {
+      // WGSL requires explicit float typing; appending 'f' ensures C-style floats correctly cast to f32
       const isFloat = num.includes('.');
-      return num + (suffix ? "f" : (isFloat ? "f" : "")); 
+      if (isFloat && !suffix) {
+          return num + "f";
+      }
+      return num + (suffix ? suffix : ""); 
   }
 
 Comment
