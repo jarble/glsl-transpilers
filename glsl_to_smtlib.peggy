@@ -1,31 +1,9 @@
 {
-  const typeMap = {
-    "int": "Int",
-    "float": "Real",
-    "bool": "Bool",
-    "vec2": "(Array Int Real)",
-    "vec3": "(Array Int Real)",
-    "vec4": "(Array Int Real)",
-    "ivec2": "(Array Int Int)",
-    "ivec3": "(Array Int Int)",
-    "ivec4": "(Array Int Int)",
-    "bvec2": "(Array Int Bool)",
-    "bvec3": "(Array Int Bool)",
-    "bvec4": "(Array Int Bool)",
-    "mat2": "(Array Int (Array Int Real))",
-    "mat3": "(Array Int (Array Int Real))",
-    "mat4": "(Array Int (Array Int Real))"
-  };
-
-  function mapType(glslType) {
-    if (!glslType || glslType === "void") return "()";
-    return typeMap[glslType] || glslType;
-  }
-
   function getDefault(smtType) {
       if (smtType === "Bool") return "false";
       if (smtType === "Int") return "0";
       if (smtType === "Real") return "0.0";
+      if (smtType === "()") return "()";
       
       const prefix = "(Array Int ";
       if (smtType.startsWith(prefix)) {
@@ -41,51 +19,51 @@
 /* ---------------------------------------------------- */
 
 Start
-  = _ items:(TopLevel)* _ { 
-      return items.join("\n\n"); 
+  = comments:_ items:(TopLevel)* trailing:_ { 
+      return comments + items.join("\n\n") + (trailing ? "\n" + trailing : ""); 
     }
 
 TopLevel
-  = StructDecl
-  / FunctionDecl
-  / TypelessGlobalConst
-  / GlobalVarDecl
+  = comments:_ decl:(StructDecl / FunctionDecl / TypelessGlobalConst / GlobalVarDecl) {
+      return comments + decl;
+    }
 
 /* ---------------------------------------------------- */
 /* Structs & Globals                                    */
 /* ---------------------------------------------------- */
 
 StructDecl
-  = "struct" __ name:Identifier _ "{" _ members:(StructMember)* "}" _ ";" _ {
-      const memberList = members.join(" ");
-      return `(declare-datatypes ((${name} 0)) (((${name} ${memberList}))))`;
+  = "struct" __ name:Identifier _ "{" members:(StructMember)* trailing:_ "}" _ ";" {
+      const memberList = members.join(" ") + trailing;
+      return `(declare-datatypes ((compiled_${name} 0)) (((compiled_${name} ${memberList}))))`;
     }
 
 StructMember
-  = type:Type __ id:Identifier isArray:(_ "[" _ Expression? _ "]")? _ ";" _ {
-      let smtType = mapType(type);
+  = comments:_ type:Type __ id:Identifier isArray:(_ "[" _ Expression? _ "]")? _ ";" {
+      let smtType = type;
       if (isArray) smtType = `(Array Int ${smtType})`;
-      return `(${id} ${smtType})`;
+      return `${comments}(compiled_${id} ${smtType})`;
     }
 
 TypelessGlobalConst
-  = "const" __ head:VarInit tail:(_ "," _ VarInit)* _ ";" _ {
-      const vars = [head, ...tail.map(t => t[3])];
+  = "const" ws1:__ head:VarInit tail:(ws2:_ "," ws3:_ VarInit)* ws4:_ ";" {
+      const vars = [head, ...tail.map(t => { t[3].ws = t[0]+t[2]; return t[3]; })];
       const smtType = "Real"; 
-      return vars.map(v => {
-          if (v.val) return `(declare-const ${v.id} ${smtType})\n(assert (= ${v.id} ${v.val}))`;
-          return `(declare-const ${v.id} ${smtType})`;
+      return vars.map((v, i) => {
+          let c = (i === 0 ? ws1 : v.ws) + ws4;
+          if (v.val) return `${c}(declare-const ${v.id} ${smtType})\n(assert (= ${v.id} ${v.val}))`;
+          return `${c}(declare-const ${v.id} ${smtType})`;
       }).join("\n");
     }
 
 GlobalVarDecl
-  = mods:(VarModifier)* type:Type __ head:VarInit tail:(_ "," _ VarInit)* _ ";" _ {
-      const vars = [head, ...tail.map(t => t[3])];
-      const baseSmtType = mapType(type);
-      return vars.map(v => {
-          const smtType = v.isArray ? `(Array Int ${baseSmtType})` : baseSmtType;
-          if (v.val) return `(declare-const ${v.id} ${smtType})\n(assert (= ${v.id} ${v.val}))`;
-          return `(declare-const ${v.id} ${smtType})`;
+  = mods:(VarModifier)* type:Type ws1:__ head:VarInit tail:(ws2:_ "," ws3:_ VarInit)* ws4:_ ";" {
+      const vars = [head, ...tail.map(t => { t[3].ws = t[0]+t[2]; return t[3]; })];
+      return vars.map((v, i) => {
+          const smtType = v.isArray ? `(Array Int ${type})` : type;
+          let c = (i === 0 ? ws1 : v.ws) + ws4;
+          if (v.val) return `${c}(declare-const ${v.id} ${smtType})\n(assert (= ${v.id} ${v.val}))`;
+          return `${c}(declare-const ${v.id} ${smtType})`;
       }).join("\n");
     }
 
@@ -94,27 +72,26 @@ GlobalVarDecl
 /* ---------------------------------------------------- */
 
 FunctionDecl
-  = type:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:FunctionBody _ "}" {
+  = type:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:FunctionBody trailing:_ "}" {
       const pList = params ? params.join(" ") : "";
-      const smtType = mapType(type);
       
-      let smtBody = body.returnExpr;
+      let smtBody = body.returnExpr + trailing;
       if (body.locals.length > 0) {
-          const bindings = body.locals.map(l => `(${l.id} ${l.val})`).join(" ");
-          smtBody = `(let (${bindings})\n    ${smtBody})`;
+          const bindings = body.locals.map(l => `${l.comment || ""}(${l.id} ${l.val})`).join("\n    ");
+          smtBody = `(let (\n    ${bindings}\n  )\n    ${smtBody})`;
       }
       
-      return `(define-fun ${name} (${pList}) ${smtType}\n  ${smtBody}\n)`;
+      return `(define-fun compiled_${name} (${pList}) ${type}\n  ${smtBody}\n)`;
     }
 
 ParamList
-  = head:ParamDecl tail:(_ "," _ ParamDecl)* {
-      return [head].concat(tail.map(t => t[3]));
+  = head:ParamDecl tail:(ws1:_ "," ws2:_ ParamDecl)* {
+      return [head].concat(tail.map(t => t[0] + t[2] + t[3]));
     }
 
 ParamDecl
-  = mods:(VarModifier)* type:Type __ id:Identifier {
-      return `(${id} ${mapType(type)})`;
+  = mods:(VarModifier)* type:Type ws:__ id:Identifier {
+      return `${ws}(compiled_${id} ${type})`;
     }
 
 /* ---------------------------------------------------- */
@@ -133,11 +110,11 @@ FunctionBody
           } else if (stmt.type === "LocalVar") {
               locals.push(stmt);
           } else if (stmt.type === "Return") {
-              returnExpr = stmt.expr;
+              returnExpr = (stmt.comment || "") + stmt.expr;
           } else if (stmt.type === "If") {
               let tRet = stmt.trueBlock.returnExpr;
               let fRet = stmt.falseBlock ? stmt.falseBlock.returnExpr : returnExpr;
-              if (tRet !== "()") returnExpr = `(ite ${stmt.cond} ${tRet} ${fRet})`;
+              if (tRet !== "()") returnExpr = (stmt.comment || "") + `(ite ${stmt.cond} ${tRet} ${fRet})`;
           }
       });
       
@@ -145,60 +122,66 @@ FunctionBody
     }
 
 Statement
-  = TypelessConstDecl
-  / LocalVarDecl
-  / AssignmentStmt
-  / IfStmt
-  / ReturnStmt
+  = comments:_ stmt:(TypelessConstDecl / LocalVarDecl / AssignmentStmt / IfStmt / ReturnStmt) {
+      if (Array.isArray(stmt)) {
+          if (stmt.length > 0) stmt[0].comment = comments + (stmt[0].comment || "");
+      } else {
+          stmt.comment = comments + (stmt.comment || "");
+      }
+      return stmt;
+  }
 
 IfStmt
-  = "if" _ "(" _ cond:Expression _ ")" _ "{" _ trueBlock:FunctionBody "}" _ falseBlock:("else" _ "{" _ FunctionBody "}")? _ {
+  = "if" ws1:_ "(" ws2:_ cond:Expression ws3:_ ")" ws4:_ "{" _ trueBlock:FunctionBody trailing1:_ "}" falseBlock:(ws5:_ "else" ws6:_ "{" _ FunctionBody trailing2:_ "}")? {
+      if (trailing1) trueBlock.returnExpr += trailing1;
+      if (falseBlock && falseBlock[7]) falseBlock[6].returnExpr += falseBlock[7];
+      
       return {
          type: "If",
+         comment: ws1 + ws2 + ws3 + ws4,
          cond: cond,
          trueBlock: trueBlock,
-         falseBlock: falseBlock ? falseBlock[3] : null
+         falseBlock: falseBlock ? falseBlock[6] : null
       };
   }
 
 TypelessConstDecl
-  = "const" __ head:VarInit tail:(_ "," _ VarInit)* _ ";" _ {
-      const vars = [head, ...tail.map(t => t[3])];
+  = "const" ws1:__ head:VarInit tail:(ws2:_ "," ws3:_ VarInit)* ws4:_ ";" {
+      const vars = [head, ...tail.map(t => { t[3].ws = t[0]+t[2]; return t[3]; })];
       const smtType = "Real";
-      return vars.map(v => {
+      return vars.map((v, i) => {
           let defaultVal = getDefault(smtType);
-          return { type: "LocalVar", id: v.id, val: v.val || defaultVal };
+          return { type: "LocalVar", id: v.id, val: v.val || defaultVal, comment: (i===0?ws1:v.ws) + ws4 };
       });
     }
 
 LocalVarDecl
-  = mods:(VarModifier)* type:Type __ head:VarInit tail:(_ "," _ VarInit)* _ ";" _ {
-      const vars = [head, ...tail.map(t => t[3])];
-      const baseSmtType = mapType(type);
-      return vars.map(v => {
-          const smtType = v.isArray ? `(Array Int ${baseSmtType})` : baseSmtType;
+  = mods:(VarModifier)* type:Type ws1:__ head:VarInit tail:(ws2:_ "," ws3:_ VarInit)* ws4:_ ";" {
+      const vars = [head, ...tail.map(t => { t[3].ws = t[0]+t[2]; return t[3]; })];
+      return vars.map((v, i) => {
+          const smtType = v.isArray ? `(Array Int ${type})` : type;
           let defaultVal = getDefault(smtType);
-          return { type: "LocalVar", id: v.id, val: v.val || defaultVal };
+          return { type: "LocalVar", id: v.id, val: v.val || defaultVal, comment: (i===0?ws1:v.ws) + ws4 };
       });
     }
 
 VarInit
   = id:Identifier isArray:(_ "[" _ Expression? _ "]")? val:(_ "=" _ Expression)? {
-      return { id: id, isArray: !!isArray, val: val ? val[3] : null };
+      return { id: "compiled_" + id, isArray: !!isArray, val: val ? val[3] : null };
     }
 
 AssignmentStmt
-  = target:LeftHandSide _ "=" _ expr:Expression _ ";" _ {
-      return [{ type: "LocalVar", id: target, val: expr }];
+  = target:LeftHandSide ws1:_ "=" ws2:_ expr:Expression ws3:_ ";" {
+      return [{ type: "LocalVar", id: target, val: ws1 + ws2 + ws3 + expr }];
     }
 
 LeftHandSide
-  = id:Identifier "." prop:Identifier { return `${id}_${prop}`; } 
-  / Identifier
+  = id:Identifier "." prop:Identifier { return `compiled_${id}_${prop}`; } 
+  / id:Identifier { return `compiled_${id}`; }
 
 ReturnStmt
-  = "return" __ expr:Expression _ ";" _ {
-      return { type: "Return", expr: expr };
+  = "return" ws1:__ expr:Expression ws2:_ ";" {
+      return { type: "Return", expr: ws1 + ws2 + expr };
     }
 
 /* ---------------------------------------------------- */
@@ -209,42 +192,42 @@ Expression
   = TernaryExpr
 
 TernaryExpr
-  = cond:BinaryExpr _ "?" _ trueExpr:TernaryExpr _ ":" _ falseExpr:TernaryExpr {
-      return `(ite ${cond} ${trueExpr} ${falseExpr})`;
+  = cond:BinaryExpr ws1:_ "?" ws2:_ trueExpr:TernaryExpr ws3:_ ":" ws4:_ falseExpr:TernaryExpr {
+      return `${ws1}${ws2}${ws3}${ws4}(ite ${cond} ${trueExpr} ${falseExpr})`;
   }
   / BinaryExpr
 
 BinaryExpr
-  = left:UnaryExpr tail:(_ ("&&" / "||" / "==" / "!=" / "<=" / ">=" / "<" / ">" / "+" / "-" / "*" / "/") _ UnaryExpr)* {
+  = left:UnaryExpr tail:(ws1:_ op:("&&" / "||" / "==" / "!=" / "<=" / ">=" / "<" / ">" / "+" / "-" / "*" / "/") ws2:_ right:UnaryExpr { return {op, right, ws: ws1+ws2}; })* {
       return tail.reduce((result, element) => {
-        let op = element[1];
+        let op = element.op;
         if (op === "==") op = "="; 
-        if (op === "!=") return `(not (= ${result} ${element[3]}))`;
+        if (op === "!=") return `${element.ws}(not (= ${result} ${element.right}))`;
         if (op === "&&") op = "and";
         if (op === "||") op = "or";
-        return `(${op} ${result} ${element[3]})`;
+        return `${element.ws}(${op} ${result} ${element.right})`;
       }, left);
     }
 
 UnaryExpr
-  = "-" _ expr:PostfixExpr { return `(- ${expr})`; }
-  / "!" _ expr:PostfixExpr { return `(not ${expr})`; }
+  = "-" ws:_ expr:PostfixExpr { return `${ws}(- ${expr})`; }
+  / "!" ws:_ expr:PostfixExpr { return `${ws}(not ${expr})`; }
   / PostfixExpr
 
 PostfixExpr
   = head:PrimaryExpr tail:(
-      _ "." _ prop:Identifier { return { type: "prop", val: prop }; }
-    / _ "[" _ idx:Expression _ "]" { return { type: "index", val: idx }; }
+      ws1:_ "." ws2:_ prop:Identifier { return { type: "prop", val: prop, ws: ws1+ws2 }; }
+    / ws1:_ "[" ws2:_ idx:Expression ws3:_ "]" { return { type: "index", val: idx, ws: ws1+ws2+ws3 }; }
   )* {
       return tail.reduce((result, element) => {
-          if (element.type === "index") return `(select ${result} ${element.val})`;
+          if (element.type === "index") return `${element.ws}(select ${result} ${element.val})`;
           if (element.type === "prop") {
               const p = element.val;
-              if (p === "x" || p === "r") return `(select ${result} 0)`;
-              if (p === "y" || p === "g") return `(select ${result} 1)`;
-              if (p === "z" || p === "b") return `(select ${result} 2)`;
-              if (p === "w" || p === "a") return `(select ${result} 3)`;
-              return `${result}_${p}`;
+              if (p === "x" || p === "r") return `${element.ws}(select ${result} 0)`;
+              if (p === "y" || p === "g") return `${element.ws}(select ${result} 1)`;
+              if (p === "z" || p === "b") return `${element.ws}(select ${result} 2)`;
+              if (p === "w" || p === "a") return `${element.ws}(select ${result} 3)`;
+              return `${element.ws}${result}_${p}`;
           }
       }, head);
   }
@@ -252,16 +235,15 @@ PostfixExpr
 PrimaryExpr
   = ArrayConstructor
   / FunctionCall
-  / "(" _ expr:Expression _ ")" { return expr; }
+  / "(" ws1:_ expr:Expression ws2:_ ")" { return ws1 + expr + ws2; }
   / Number
-  / Identifier
+  / id:Identifier { return "compiled_" + id; }
 
 ArrayConstructor
-  = type:Type _ "[" _ Expression? _ "]" _ "(" _ args:ArgList? _ ")" {
-      const smtType = mapType(type);
-      const arrayType = `(Array Int ${smtType})`;
-      
-      let result = `((as const ${arrayType}) ${getDefault(smtType)})`;
+  = type:Type ws1:_ "[" ws2:_ Expression? ws3:_ "]" ws4:_ "(" ws5:_ args:ArgList? ws6:_ ")" {
+      const arrayType = `(Array Int ${type})`;
+      const comments = ws1 + ws2 + ws3 + ws4 + ws5 + ws6;
+      let result = `${comments}((as const ${arrayType}) ${getDefault(type)})`;
       
       if (args) {
           args.forEach((arg, i) => {
@@ -272,84 +254,71 @@ ArrayConstructor
   }
 
 FunctionCall
-  = name:Identifier _ "(" _ args:ArgList? _ ")" {
+  = name:Identifier ws1:_ "(" ws2:_ args:ArgList? ws3:_ ")" {
       const argStr = args ? args.join(" ") : "";
-      if (name === "float") return `(to_real ${argStr})`;
-      if (name === "int") return `(to_int ${argStr})`;
+      const comments = ws1 + ws2 + ws3;
+      
+      if (name === "float") return `${comments}(to_real ${argStr})`;
+      if (name === "int") return `${comments}(to_int ${argStr})`;
+      
+      const builtIns = new Set([
+          "abs", "sign", "min", "max", "clamp", "floor", "ceil", "trunc",
+          "fract", "mod", "mix", "step", "smoothstep", "fma"
+      ]);
+      
+      let smtName = builtIns.has(name) ? name : `compiled_${name}`;
       
       if (args) {
-          // Absolute Value & Sign
-          if (name === "abs" && args.length === 1) {
-              return `(abs ${args[0]})`;
-          }
-          if (name === "sign" && args.length === 1) {
-              return `(ite (> ${args[0]} 0.0) 1.0 (ite (< ${args[0]} 0.0) -1.0 0.0))`;
-          }
-
-          // Min, Max, Clamp
-          if (name === "min" && args.length === 2) {
-              return `(ite (< ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
-          }
-          if (name === "max" && args.length === 2) {
-              return `(ite (> ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
-          }
-          if (name === "clamp" && args.length === 3) {
-              return `(ite (< ${args[0]} ${args[1]}) ${args[1]} (ite (> ${args[0]} ${args[2]}) ${args[2]} ${args[0]}))`;
-          }
-
-          // Rounding, Modulo, Fractionals
-          if (name === "floor" && args.length === 1) {
-              return `(to_real (to_int ${args[0]}))`;
-          }
-          if (name === "ceil" && args.length === 1) {
-              return `(- (to_real (to_int (- ${args[0]}))))`;
-          }
-          if (name === "trunc" && args.length === 1) {
-              return `(ite (< ${args[0]} 0.0) (- (to_real (to_int (- ${args[0]})))) (to_real (to_int ${args[0]})))`;
-          }
-          if (name === "fract" && args.length === 1) {
-              return `(- ${args[0]} (to_real (to_int ${args[0]})))`;
-          }
-          if (name === "mod" && args.length === 2) {
-              return `(- ${args[0]} (* ${args[1]} (to_real (to_int (/ ${args[0]} ${args[1]})))))`;
-          }
-
-          // Interpolation & Steps
-          if (name === "mix" && args.length === 3) {
-              return `(+ (* ${args[0]} (- 1.0 ${args[2]})) (* ${args[1]} ${args[2]}))`;
-          }
-          if (name === "step" && args.length === 2) {
-              return `(ite (< ${args[1]} ${args[0]}) 0.0 1.0)`;
-          }
+          if (name === "abs" && args.length === 1) return `${comments}(abs ${args[0]})`;
+          if (name === "sign" && args.length === 1) return `${comments}(ite (> ${args[0]} 0.0) 1.0 (ite (< ${args[0]} 0.0) -1.0 0.0))`;
+          if (name === "min" && args.length === 2) return `${comments}(ite (< ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
+          if (name === "max" && args.length === 2) return `${comments}(ite (> ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
+          if (name === "clamp" && args.length === 3) return `${comments}(ite (< ${args[0]} ${args[1]}) ${args[1]} (ite (> ${args[0]} ${args[2]}) ${args[2]} ${args[0]}))`;
+          if (name === "floor" && args.length === 1) return `${comments}(to_real (to_int ${args[0]}))`;
+          if (name === "ceil" && args.length === 1) return `${comments}(- (to_real (to_int (- ${args[0]}))))`;
+          if (name === "trunc" && args.length === 1) return `${comments}(ite (< ${args[0]} 0.0) (- (to_real (to_int (- ${args[0]})))) (to_real (to_int ${args[0]})))`;
+          if (name === "fract" && args.length === 1) return `${comments}(- ${args[0]} (to_real (to_int ${args[0]})))`;
+          if (name === "mod" && args.length === 2) return `${comments}(- ${args[0]} (* ${args[1]} (to_real (to_int (/ ${args[0]} ${args[1]})))))`;
+          if (name === "mix" && args.length === 3) return `${comments}(+ (* ${args[0]} (- 1.0 ${args[2]})) (* ${args[1]} ${args[2]}))`;
+          if (name === "step" && args.length === 2) return `${comments}(ite (< ${args[1]} ${args[0]}) 0.0 1.0)`;
           if (name === "smoothstep" && args.length === 3) {
-              // t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)
               const tRaw = `(/ (- ${args[2]} ${args[0]}) (- ${args[1]} ${args[0]}))`;
               const t = `(ite (< ${tRaw} 0.0) 0.0 (ite (> ${tRaw} 1.0) 1.0 ${tRaw}))`;
-              // return t * t * (3.0 - 2.0 * t)
-              return `(* (* ${t} ${t}) (- 3.0 (* 2.0 ${t})))`;
+              return `${comments}(* (* ${t} ${t}) (- 3.0 (* 2.0 ${t})))`;
           }
-
-          // Fused Multiply-Add
-          if (name === "fma" && args.length === 3) {
-              return `(+ (* ${args[0]} ${args[1]}) ${args[2]})`;
-          }
+          if (name === "fma" && args.length === 3) return `${comments}(+ (* ${args[0]} ${args[1]}) ${args[2]})`;
       }
       
-      // Fallback for native SMT-LIB supported math (e.g. sqrt) or undefined functions
-      return `(${name} ${argStr})`;
+      return `${comments}(${smtName} ${argStr})`;
     }
 
 ArgList
-  = head:Expression tail:(_ "," _ Expression)* {
-      return [head].concat(tail.map(t => t[3]));
+  = head:Expression tail:(ws1:_ "," ws2:_ Expression)* {
+      return [head].concat(tail.map(t => t[0] + t[2] + t[3]));
     }
 
 /* ---------------------------------------------------- */
-/* Lexical Tokens & Whitespace                          */
+/* Lexical Tokens & Comment Capturing                   */
 /* ---------------------------------------------------- */
 
 Type
-  = "void" / "float" / "int" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / Identifier
+  = "void" { return "()"; }
+  / "float" { return "Real"; }
+  / "int" { return "Int"; }
+  / "bool" { return "Bool"; }
+  / "vec2" { return "(Array Int Real)"; }
+  / "vec3" { return "(Array Int Real)"; }
+  / "vec4" { return "(Array Int Real)"; }
+  / "ivec2" { return "(Array Int Int)"; }
+  / "ivec3" { return "(Array Int Int)"; }
+  / "ivec4" { return "(Array Int Int)"; }
+  / "bvec2" { return "(Array Int Bool)"; }
+  / "bvec3" { return "(Array Int Bool)"; }
+  / "bvec4" { return "(Array Int Bool)"; }
+  / "mat2" { return "(Array Int (Array Int Real))"; }
+  / "mat3" { return "(Array Int (Array Int Real))"; }
+  / "mat4" { return "(Array Int (Array Int Real))"; }
+  / id:Identifier { return "compiled_" + id; }
 
 VarModifier
   = ("const" / "inout" / "in" / "out" / "uniform" / "varying" / "attribute") __
@@ -361,16 +330,27 @@ Number
   = $([0-9]+ "." [0-9]+ / "." [0-9]+ / [0-9]+ "." / [0-9]+)
 
 _ "optional whitespace"
-  = (WhiteSpace / MultiLineComment / SingleLineComment)*
+  = tokens:(WhiteSpace / MultiLineComment / SingleLineComment)* {
+      const comments = tokens.filter(t => typeof t === "string" && t.startsWith(";"));
+      return comments.length > 0 ? comments.join("\n") + "\n" : "";
+  }
 
 __ "mandatory whitespace"
-  = (WhiteSpace / MultiLineComment / SingleLineComment)+
+  = tokens:(WhiteSpace / MultiLineComment / SingleLineComment)+ {
+      const comments = tokens.filter(t => typeof t === "string" && t.startsWith(";"));
+      return comments.length > 0 ? comments.join("\n") + "\n" : "";
+  }
 
 WhiteSpace
-  = [ \t\n\r]
+  = [ \t\n\r] { return null; }
 
 SingleLineComment
-  = "//" (![\n\r] .)*
+  = "//" text:(![\n\r] .)* { 
+      return ";" + text.map(t => t[1]).join(""); 
+    }
 
 MultiLineComment
-  = "/*" (!"*/" .)* "*/"
+  = "/*" text:(!"*/" .)* "*/" { 
+      const content = text.map(t => t[1]).join("");
+      return content.split("\n").map(line => ";" + line).join("\n");
+    }
