@@ -2,22 +2,16 @@
   const typeMap = {
     float: "float",
     int: "int",
-    uint: "uint",
+    uint: "unsigned int",
     bool: "bool",
 
-    vec2: "float2",
-    vec3: "float3",
-    vec4: "float4",
-    ivec2: "int2",
-    ivec3: "int3",
-    ivec4: "int4",
-    bvec2: "bool2",
-    bvec3: "bool3",
-    bvec4: "bool4",
+    vec2: "vec2",
+    vec3: "vec3",
+    vec4: "vec4",
 
-    mat2: "float2x2",
-    mat3: "float3x3",
-    mat4: "float4x4",
+    mat2: "mat2",
+    mat3: "mat3",
+    mat4: "mat4",
 
     void: "void"
   };
@@ -28,34 +22,99 @@
 
   // Intercepts built-in GLSL variables and constants
   function mapVariable(name) {
-    // Slang generally handles SV_ semantics internally depending on the target,
-    // but for raw translation, we map them purely or leave them untouched.
     const builtinVars = {
-      // Add any specific GLSL -> Slang system value mappings here if needed
+      "gl_Position": "gl_Position",
+      "gl_FragColor": "gl_FragColor",
+      "gl_FragCoord": "gl_FragCoord",
+      "gl_FrontFacing": "gl_FrontFacing",
+      "gl_PointSize": "gl_PointSize",
+      "gl_VertexID": "gl_VertexID",
+      "gl_InstanceID": "gl_InstanceID"
     };
     return builtinVars[name] || name;
   }
 
-  // Intercepts the function name and its arguments to map GLSL -> Slang
+  // Intercepts the function name and its arguments to generate raw C expressions
   function mapFuncCall(name, args) {
     args = args || [];
-    const argStr = args.join(", ");
+    const a = args[0] || "";
+    const b = args[1] || "";
+    const c = args[2] || "";
 
-    // Slang shares HLSL intrinsics. Some GLSL names differ and must be remapped.
     switch(name) {
-      case "mix": return `lerp(${argStr})`;
-      case "fract": return `frac(${argStr})`;
-      case "inversesqrt": return `rsqrt(${argStr})`;
-      case "mod": return `fmod(${argStr})`;
-      
-      // Unmapped functions (sin, cos, dot, cross, normalize, clamp, etc.) 
-      // pass through naturally as they share names in Slang/HLSL.
-      default: return `${name}(${argStr})`;
+      // Trigonometry
+      case "radians": return `(${a} * (3.14159265358979323846f / 180.0f))`;
+      case "degrees": return `(${a} * (180.0f / 3.14159265358979323846f))`;
+      case "sin": return `sinf(${a})`;
+      case "cos": return `cosf(${a})`;
+      case "tan": return `tanf(${a})`;
+      case "asin": return `asinf(${a})`;
+      case "acos": return `acosf(${a})`;
+      case "atan": return args.length === 2 ? `atan2f(${a}, ${b})` : `atanf(${a})`;
+
+      // Exponential
+      case "pow": return `powf(${a}, ${b})`;
+      case "exp": return `expf(${a})`;
+      case "log": return `logf(${a})`;
+      case "exp2": return `exp2f(${a})`;
+      case "log2": return `log2f(${a})`;
+      case "sqrt": return `sqrtf(${a})`;
+      case "inversesqrt": return `(1.0f / sqrtf(${a}))`;
+
+      // Common Math
+      case "abs": return `fabsf(${a})`;
+      case "sign": return `((${a} > 0.0f) - (${a} < 0.0f))`;
+      case "floor": return `floorf(${a})`;
+      case "ceil": return `ceilf(${a})`;
+      case "fract": return `(${a} - floorf(${a}))`;
+      case "mod": return `fmodf(${a}, ${b})`;
+      case "min": return `fminf(${a}, ${b})`;
+      case "max": return `fmaxf(${a}, ${b})`;
+      case "clamp": return `clamp(${a}, ${b}, ${c})`;
+      case "mix": return `mix(${a}, ${b}, ${c})`;
+      case "step": return `(${b} < ${a} ? 0.0f : 1.0f)`;
+      case "smoothstep": 
+        const t = `clamp((${c} - ${a}) / (${b} - ${a}), 0.0f, 1.0f)`;
+        return `(${t} * ${t} * (3.0f - 2.0f * ${t}))`;
+
+      // Geometric (Assuming standard C macro/function mappings in user code)
+      case "length": return `length(${a})`;
+      case "distance": return `distance(${a}, ${b})`;
+      case "dot": return `dot(${a}, ${b})`;
+      case "cross": return `cross(${a}, ${b})`;
+      case "normalize": return `normalize(${a})`;
+      case "reflect": return `reflect(${a}, ${b})`;
+
+      // Unmapped functions pass through naturally
+      default: return `${name}(${args.join(", ")})`;
     }
   }
 
   function emitComment(c){
     return c + "\n";
+  }
+
+  // Generates the C Structs for GLSL Matrices
+  function getBuiltInStructs() {
+    return `
+typedef struct {
+    vec2 col0;
+    vec2 col1;
+} mat2;
+
+typedef struct {
+    vec3 col0;
+    vec3 col1;
+    vec3 col2;
+} mat3;
+
+typedef struct {
+    vec4 col0;
+    vec4 col1;
+    vec4 col2;
+    vec4 col3;
+} mat4;
+`;
   }
 }
 
@@ -69,9 +128,12 @@ Start
   items:(TopLevel (_ TopLevel)*)?
   _
   {
-    return items
+    const program = items
     ? [items[0]].concat(items[1].map(x=>x[1])).join("\n")
     : "";
+    
+    // Append the Matrix implementations to the final output
+    return program + "\n\n/* --- GLSL Built-in Matrix Types --- */\n" + getBuiltInStructs();
   }
 
 /* ===================================================== */
@@ -168,7 +230,7 @@ StructDecl
     let result = `struct ${structName} {\n${fs.join("\n")}\n};`;
 
     if (n1 && n2) {
-      result += `\n${structName} ${n2};`;
+      result += `\nstruct ${structName} ${n2};`;
     }
 
     return result;
@@ -202,9 +264,8 @@ GlobalDecl
   _
   ";"
   {
-    const prefix = qual ? qual + " " : "";
-    const ty = arr ? mapType(t)+"[]" : mapType(t);
-    return prefix + ty + " " + id + (init ? " = " + init : "") + ";";
+    const ty = mapType(t);
+    return ty + " " + id + (arr ? "[]" : "") + (init ? " = " + init : "") + ";";
   }
 
 StorageQualifier
@@ -254,8 +315,7 @@ VarDecl
     const ty = mapType(t);
 
     return decls.map(d => {
-      const dtype = d.arr ? ty + "[]" : ty;
-      return dtype + " " + d.id + (d.init ? " = " + d.init : "") + ";";
+      return ty + " " + d.id + (d.arr ? "[]" : "") + (d.init ? " = " + d.init : "") + ";";
     }).join("\n");
   }
 
@@ -295,8 +355,7 @@ Param
   __
   id:Identifier
   {
-    const prefix = qual ? qual[0] + " " : "";
-    return `${prefix}${mapType(t)} ${id}`;
+    return `${mapType(t)} ${id}`;
   }
 
 ParameterQualifier
@@ -430,8 +489,7 @@ VarDeclInline
     const ty = mapType(t);
 
     return decls.map(d => {
-      const dtype = d.arr ? ty + "[]" : ty;
-      return dtype + " " + d.id + (d.init ? " = " + d.init : "");
+      return ty + " " + d.id + (d.arr ? "[]" : "") + (d.init ? " = " + d.init : "");
     }).join(", ");
   }
 
@@ -631,7 +689,7 @@ ArrayConstructor
   _
   ")"
   {
-    return "{ " + (args ? args.join(", ") : "") + " }";
+    return "(" + mapType(t) + "[]){ " + (args ? args.join(", ") : "") + " }";
   }
 
 TypeConstructor
@@ -644,7 +702,7 @@ TypeConstructor
   _
   ")"
   {
-    return mapType(name) + "(" + (args ? args.join(", ") : "") + ")";
+    return "(" + mapType(name) + "){ " + (args ? args.join(", ") : "") + " }";
   }
 
 FuncCall
