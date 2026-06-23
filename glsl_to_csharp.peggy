@@ -202,11 +202,11 @@ StructDecl
   {
     const n1 = headName;
     const n2 = tailName;
-    const structName = n1 || n2 || "AnonymousStruct";
+    const structName = n1 ? n1 : (n2 ? n2 + "_t" : "AnonymousStruct");
 
     let result = "public struct " + structName + ws2 + "{" + items.join("") + wsEnd + "}";
 
-    if (n1 && n2) {
+    if (n2) {
       result += ws3 + "public " + structName + " " + n2 + ws4 + ";";
     }
 
@@ -215,7 +215,7 @@ StructDecl
 
 StructField
   =
-  t:Type ws1:__ id:Identifier ws2:_ arr:ArraySuffix? ws3:_ ";"
+  t:Type ws1:__ id:RawIdentifier ws2:_ arr:ArraySuffix? ws3:_ ";"
   {
     const typeStr = arr ? t + "[]" : t;
     return "public " + typeStr + ws1 + id + ws2 + (arr ? arr.str : "") + ws3 + ";";
@@ -552,7 +552,7 @@ Assignable
 
 AccessPart
   =
-  "." ws:_ name:Identifier { return {type:"member", name, ws}; }
+  "." ws:_ name:RawIdentifier { return {type:"member", name, ws}; }
   / "[" ws1:_ idx:Expression ws2:_ "]" { return {type:"index", index:idx, ws1, ws2}; }
 
 /* ===================================================== */
@@ -574,6 +574,7 @@ ArraySuffix = "[" ws1:_ size:Expression? ws2:_ "]" { return { size, str: "[" + w
 
 // Uses the smart heuristic wrapper
 Identifier = name:$([a-zA-Z_][a-zA-Z0-9_]*) { return mapIdentifier(name); }
+RawIdentifier = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
   =

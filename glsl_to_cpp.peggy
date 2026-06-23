@@ -42,12 +42,17 @@ const builtinMap = {
 
 const paramQualifiersByFunction = Object.create(null);
 
+function prefixId(id) {
+  if (builtinMap[id] || typeMap[id] || id === "main" || id === "gl_Position" || id === "gl_FragColor" || id === "gl_FragCoord") return id;
+  return "compiled_" + id;
+}
+
 function mapType(t){
- return typeMap[t] || t;
+ return typeMap[t] || prefixId(t);
 }
 
 function mapFunc(f){
- return builtinMap[f] || f;
+ return builtinMap[f] || prefixId(f);
 }
 
 function mapParamQualifier(q){
@@ -76,13 +81,10 @@ function emitComment(c){
 
 Start
 =
-_
-items:(TopLevel (_ TopLevel)*)?
-_
+items:(ws:$(_) t:TopLevel { return ws + t; })*
+wsEnd:$(_)
 {
- return items
- ? [items[0]].concat(items[1].map(x=>x[1])).join("\n")
- : "";
+ return items.join("") + wsEnd;
 }
 
 /* ===================================================== */
@@ -91,8 +93,6 @@ _
 
 TopLevel
 =
-CommentStmt
-/
 StructDecl
 /
 GlobalDecl
@@ -103,8 +103,6 @@ Statement
 
 Statement
 =
-CommentStmt
-/
 VarDecl
 /
 AssignmentStmt
@@ -155,24 +153,25 @@ $("/*" (!"*/" .)* "*/")
 StructDecl
 =
 "struct"
-__
-name:Identifier
-_
-"{"
-_
+data:(
+    ws1:__ id:Identifier ws2:_ "{" { return { name: id, wsBeforeBrace: ws2, wsAfterStruct: ws1 }; }
+  / ws1:_ "{" { return { name: null, wsBeforeBrace: ws1, wsAfterStruct: "" }; }
+)
+ws3:_
 fields:(StructField (_ StructField)*)?
-_
+ws4:_
 "}"
-_
+ws5:_
+varName:Identifier?
+ws6:_
 ";"?
 {
+ const structName = data.name ? prefixId(data.name) : "";
  const fs = fields
  ? [fields[0]].concat(fields[1].map(x=>x[1]))
  : [];
 
- return `struct ${name} {
-${fs.join("\n")}
-};`;
+ return `struct ${structName} {\n${fs.join("\n")}\n}${varName ? " " + prefixId(varName) : ""};`;
 }
 
 StructField
@@ -206,7 +205,7 @@ _
  const ty = arr ? mapType(t)+"[]" : mapType(t);
  const prefix = qual === "const" ? "const " : "";
 
- return prefix + ty + " " + id + (init ? " = " + init : "") + ";";
+ return prefix + ty + " " + prefixId(id) + (init ? " = " + init : "") + ";";
 }
 
 StorageQualifier
@@ -233,7 +232,7 @@ init:(
 )?
 {
  return {
-  id,
+  id: prefixId(id),
   arr,
   init
  };
@@ -290,9 +289,9 @@ _
 body:Block
 {
  const ps = params || [];
- paramQualifiersByFunction[name] = ps.map(p => p.qualifier);
+ paramQualifiersByFunction[prefixId(name)] = ps.map(p => p.qualifier);
 
- return `${mapType(ret)} ${name}(
+ return `${mapType(ret)} ${prefixId(name)}(
 ${ps.map(p => p.code).join(", ")}
 )
 ${body}`;
@@ -316,7 +315,7 @@ id:Identifier
  const qualifier = qual ? qual[0] : "";
  return {
   qualifier,
-  code: `${mapType(t)}${mapParamQualifier(qualifier)} ${id}`
+  code: `${mapType(t)}${mapParamQualifier(qualifier)} ${prefixId(id)}`
  };
 }
 
@@ -332,17 +331,9 @@ ParameterQualifier
 
 Block
 =
-"{"
-_
-stmts:(Statement (_ Statement)*)?
-_
-"}"
+"{" items:(ws:$(_) s:Statement { return ws + s; })* wsEnd:$(_) "}"
 {
- const s = stmts
- ? [stmts[0]].concat(stmts[1].map(x=>x[1]))
- : [];
-
- return "{\n" + s.join("\n") + "\n}";
+ return "{" + items.join("") + wsEnd + "}";
 }
 
 /* ===================================================== */
@@ -720,7 +711,7 @@ _
 ")"
 {
  const callArgs = args || [];
- const qualifiers = paramQualifiersByFunction[name] || [];
+ const qualifiers = paramQualifiersByFunction[prefixId(name)] || [];
  const mappedArgs = callArgs.map((arg, i) => arg);
 
  return mapFunc(name) + "(" + mappedArgs.join(", ") + ")";
@@ -748,7 +739,7 @@ tail:(_ AccessPart)*
   return p.type === "member"
    ? acc + "." + p.name
    : acc + "[" + p.index + "]";
- }, base);
+ }, prefixId(base));
 }
 
 AccessPart
