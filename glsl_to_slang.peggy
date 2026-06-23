@@ -4,749 +4,232 @@
     int: "int",
     uint: "uint",
     bool: "bool",
-
     vec2: "float2",
     vec3: "float3",
     vec4: "float4",
-    ivec2: "int2",
-    ivec3: "int3",
-    ivec4: "int4",
-    bvec2: "bool2",
-    bvec3: "bool3",
-    bvec4: "bool4",
-
-    mat2: "float2x2",
-    mat3: "float3x3",
     mat4: "float4x4",
-
     void: "void"
   };
 
-  function mapType(t){
-    return typeMap[t] || t;
+  const glslBuiltins = new Set([
+    "sin", "cos", "tan", "asin", "acos", "atan", "pow", "exp", "log", 
+    "sqrt", "abs", "sign", "floor", "ceil", "fract", "mod", "min", "max", 
+    "clamp", "mix", "step", "smoothstep", "length", "distance", "dot", 
+    "cross", "normalize", "reflect", "refract"
+  ]);
+
+  function mapType(t) {
+    return typeMap[t] || mapIdentifier(t);
   }
 
-  function mapVariable(name) {
-    const builtinVars = {
-      // Add any specific GLSL -> Slang system value mappings here if needed
-    };
-    return builtinVars[name] || name;
+  function mapIdentifier(id) {
+    // Do not prefix standard types, main, or GLSL built-ins
+    if (glslBuiltins.has(id)) return id;
+    if (id === "main" || id.startsWith("gl_") || typeMap[id]) return id;
+    
+    return "compiled_" + id;
   }
 
   function mapFuncCall(name, args) {
-    args = args || [];
-    const argStr = args.join(", ");
-
-    switch(name) {
-      case "mix": return `lerp(${argStr})`;
-      case "fract": return `frac(${argStr})`;
-      case "inversesqrt": return `rsqrt(${argStr})`;
-      case "mod": return `fmod(${argStr})`;
-      default: return `${name}(${argStr})`;
-    }
-  }
-
-  function emitComment(c){
-    return c + "\n";
+    const argStr = args ? args.join("") : "";
+    
+    // Translate specific GLSL built-ins to target language equivalents
+    if (name === "mix") return `lerp(${argStr})`;
+    if (name === "fract") return `frac(${argStr})`;
+    if (name === "mod") return `fmod(${argStr})`;
+    if (name === "inversesqrt") return `rsqrt(${argStr})`;
+    
+    if (glslBuiltins.has(name)) return `${name}(${argStr})`;
+    
+    return `${mapIdentifier(name)}(${argStr})`;
   }
 }
 
 /* ===================================================== */
-/* entry */
+/* Entry */
 /* ===================================================== */
 
 Start
-  =
-  _
-  items:(TopLevel (_ TopLevel)*)?
-  _
+  = ws:_ items:(TopLevel*)
   {
-    return items
-    ? [items[0]].concat(items[1].map(x=>x[1])).join("\n")
-    : "";
+    return ws + items.join("");
   }
 
-/* ===================================================== */
-/* top level */
-/* ===================================================== */
-
 TopLevel
-  =
-  PreprocessorDirective
-  /
-  CommentStmt
-  /
-  StructDecl
-  /
-  GlobalDecl
-  /
-  FunctionDecl
-  /
-  Statement
+  = StructDecl
+  / GlobalDecl
+  / FunctionDecl
+  / Statement
 
 Statement
-  =
-  PreprocessorDirective
-  /
-  CommentStmt
-  /
-  VarDecl
-  /
-  AssignmentStmt
-  /
-  ReturnStmt
-  /
-  IfStmt
-  /
-  ForStmt
-  /
-  WhileStmt
-  /
-  DoWhileStmt
-  /
-  SwitchStmt
-  /
-  ExprStmt
-  /
-  Block
+  = VarDecl
+  / AssignmentStmt
+  / ReturnStmt
+  / ExprStmt
 
 /* ===================================================== */
-/* preprocessor & comments */
-/* ===================================================== */
-
-PreprocessorDirective
-  =
-  // Matches `#` directives, properly ignoring line continuations "\"
-  directive:$([ \t]* "#" ( "\\" . / [^\r\n] )*)
-  { return directive; }
-
-CommentStmt
-  =
-  c:Comment
-  { return emitComment(c); }
-
-Comment
-  =
-  SingleLineComment
-  /
-  MultiLineComment
-
-SingleLineComment
-  =
-  $("//" [^\r\n]*)
-
-MultiLineComment
-  =
-  $("/*" (!"*/" .)* "*/")
-
-/* ===================================================== */
-/* structs */
+/* Structs */
 /* ===================================================== */
 
 StructDecl
-  =
-  "struct"
-  headName:(__ Identifier)?
-  _
-  "{"
-  _
-  fields:(StructField (_ StructField)*)?
-  _
-  "}"
-  _
-  tailName:(Identifier)?
-  _
-  ";"?
+  = "struct" ws1:__? headName:Identifier? ws2:_ "{" ws3:_ fields:(StructField*) "}" ws4:_ tailName:Identifier? ws5:_ ";" ws6:_
   {
-    const n1 = headName ? headName[1] : null;
-    const n2 = tailName;
-    
-    const structName = n1 || n2 || "AnonymousStruct";
+    let structName = "AnonymousStruct";
+    let instanceDecl = "";
 
-    const fs = fields
-      ? [fields[0]].concat(fields[1].map(x=>x[1]))
-      : [];
-
-    let result = `struct ${structName} {\n${fs.join("\n")}\n};`;
-
-    if (n1 && n2) {
-      result += `\n${structName} ${n2};`;
+    if (headName) {
+      structName = mapIdentifier(headName);
+    } else if (tailName) {
+      // Generate a type name if anonymous struct has an instance variable
+      structName = mapIdentifier(tailName) + "_Type"; 
     }
 
-    return result;
+    let out = `struct ${structName}` + (ws1 || " ") + `{` + ws3 + fields.join("") + `}`;
+    
+    if (tailName) {
+      out += `;\n${structName} ${mapIdentifier(tailName)}`;
+    }
+    
+    return out + ";" + ws6;
   }
 
 StructField
-  =
-  t:Type
-  __
-  id:Identifier
-  arr:ArraySuffix?
-  _
-  ";"
+  = t:Type ws1:__ id:Identifier arr:ArraySuffix? ws2:_ ";" ws3:_
   {
-    return `${mapType(t)} ${id}${arr || ""};`;
+    return mapType(t) + ws1 + mapIdentifier(id) + (arr || "") + ws2 + ";" + ws3;
   }
 
 /* ===================================================== */
-/* globals */
+/* Globals & Variables */
 /* ===================================================== */
 
 GlobalDecl
-  =
-  qual:StorageQualifier?
-  _
-  t:Type
-  __
-  id:Identifier
-  arr:ArraySuffix?
-  _
-  init:("=" _ e:Expression { return e; })?
-  _
-  ";"
+  = t:Type ws1:__ id:Identifier arr:ArraySuffix? ws2:_ init:("=" _ Expression)? ws3:_ ";" ws4:_
   {
-    const prefix = qual ? qual + " " : "";
-    return prefix + mapType(t) + " " + id + (arr ? arr : "") + (init ? " = " + init : "") + ";";
-  }
-
-StorageQualifier
-  =
-  "uniform"
-  / "attribute"
-  / "varying"
-  / "const"
-
-/* ===================================================== */
-/* variables */
-/* ===================================================== */
-
-Declarator
-  =
-  id:Identifier
-  arr:ArraySuffix?
-  _
-  init:(
-    "="
-    _
-    e:Expression
-    { return e; }
-  )?
-  {
-    return {
-      id,
-      arr: arr || "",
-      init
-    };
+    const initStr = init ? init[0] + init[1] + init[2] : "";
+    return mapType(t) + ws1 + mapIdentifier(id) + (arr || "") + ws2 + initStr + ws3 + ";" + ws4;
   }
 
 VarDecl
-  =
-  t:Type
-  __
-  head:Declarator
-  tail:(_ "," _ Declarator)*
-  _
-  ";"
+  = t:Type ws1:__ id:Identifier arr:ArraySuffix? ws2:_ init:("=" _ Expression)? ws3:_ ";" ws4:_
   {
-    const decls =
-      [head].concat(
-        tail.map(x => x[3])
-      );
-
-    const ty = mapType(t);
-
-    return decls.map(d => {
-      return ty + " " + d.id + d.arr + (d.init ? " = " + d.init : "") + ";";
-    }).join("\n");
+    const initStr = init ? init[0] + init[1] + init[2] : "";
+    return mapType(t) + ws1 + mapIdentifier(id) + (arr || "") + ws2 + initStr + ws3 + ";" + ws4;
   }
 
 /* ===================================================== */
-/* functions */
+/* Functions */
 /* ===================================================== */
 
 FunctionDecl
-  =
-  ret:Type
-  __
-  name:Identifier
-  _
-  "("
-  _
-  params:ParamList?
-  _
-  ")"
-  _
-  body:Block
+  = ret:Type ws1:__ name:Identifier ws2:_ "(" ws3:_ params:ParamList? ws4:_ ")" ws5:_ body:Block ws6:_
   {
-    return `${mapType(ret)} ${name}(${params ? params.join(", ") : ""})\n${body}`;
+    return mapType(ret) + ws1 + mapIdentifier(name) + ws2 + "(" + ws3 + (params || "") + ws4 + ")" + ws5 + body + ws6;
   }
 
 ParamList
-  =
-  head:Param
-  tail:(_ "," _ Param)*
+  = head:Param tail:(_ "," _ Param)*
   {
-    return [head].concat(tail.map(x=>x[3]));
+    return head + tail.map(t => t[0] + t[1] + t[2] + t[3]).join("");
   }
 
 Param
-  =
-  qual:(ParameterQualifier __)?
-  t:Type
-  __
-  id:Identifier
-  arr:ArraySuffix?
+  = t:Type ws1:__ id:Identifier arr:ArraySuffix?
   {
-    const prefix = qual ? qual[0] + " " : "";
-    return `${prefix}${mapType(t)} ${id}${arr || ""}`;
+    return mapType(t) + ws1 + mapIdentifier(id) + (arr || "");
   }
 
-ParameterQualifier
-  =
-  "inout"
-  / "in"
-  / "out"
-
 /* ===================================================== */
-/* blocks */
+/* Blocks & Control Flow */
 /* ===================================================== */
 
 Block
-  =
-  "{"
-  _
-  stmts:(Statement (_ Statement)*)?
-  _
-  "}"
+  = "{" ws1:_ stmts:(Statement*) "}"
   {
-    const s = stmts
-    ? [stmts[0]].concat(stmts[1].map(x=>x[1]))
-    : [];
-
-    return "{\n" + s.join("\n") + "\n}";
+    return "{" + ws1 + stmts.join("") + "}";
   }
-
-/* ===================================================== */
-/* control flow */
-/* ===================================================== */
-
-IfStmt
-  =
-  "if"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  thenStmt:Statement
-  elsePart:(_ "else" _ elseStmt:Statement { return elseStmt; })?
-  {
-    return "if(" + cond + ") " +
-           thenStmt +
-           (elsePart ? " else " + elsePart : "");
-  }
-
-WhileStmt
-  =
-  "while"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  body:Statement
-  {
-    return `while(${cond}) ${body}`;
-  }
-
-DoWhileStmt
-  =
-  "do"
-  _
-  body:Statement
-  _
-  "while"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  ";"
-  {
-    return `do ${body} while(${cond});`;
-  }
-
-ForStmt
-  =
-  "for"
-  _
-  "("
-  _
-  init:ForInit?
-  _
-  ";"
-  _
-  cond:Expression?
-  _
-  ";"
-  _
-  update:ForUpdate?
-  _
-  ")"
-  _
-  body:Statement
-  {
-    return "for(" + (init||"") + "; " + (cond||"") + "; " + (update||"") + ") " + body;
-  }
-
-ForInit
-  =
-  VarDeclInline
-  /
-  AssignmentExpr
-  /
-  Expression
-
-ForUpdate
-  =
-  AssignmentExpr
-  /
-  Postfix
-  /
-  Expression
-
-VarDeclInline
-  =
-  t:Type
-  __
-  head:Declarator
-  tail:(_ "," _ Declarator)*
-  {
-    const decls = [head].concat(tail.map(x => x[3]));
-    const ty = mapType(t);
-
-    return decls.map(d => {
-      return ty + " " + d.id + d.arr + (d.init ? " = " + d.init : "");
-    }).join(", ");
-  }
-
-/* ===================================================== */
-/* switch */
-/* ===================================================== */
-
-SwitchStmt
-  =
-  "switch"
-  _
-  "("
-  _
-  expr:Expression
-  _
-  ")"
-  _
-  "{"
-  _
-  cases:(CaseClause _)*
-  "}"
-  {
-    return "switch(" + expr + "){\n" + cases.map(x => x[0]).join("") + "\n}";
-  }
-
-CaseClause
-  =
-  "case"
-  __
-  v:Expression
-  ":"
-  _
-  body:((Statement _)+)?
-  {
-    return "case " + v + ":\n" + (body ? body.map(x => x[0]).join("") : "");
-  }
-  /
-  "default"
-  ":"
-  _
-  body:((Statement _)+)?
-  {
-    return "default:\n" + (body ? body.map(x => x[0]).join("") : "");
-  }
-
-/* ===================================================== */
-/* return / assignment */
-/* ===================================================== */
 
 ReturnStmt
-  =
-  "return"
-  _
-  expr:Expression?
-  _
-  ";"
+  = "return" ws1:__ expr:Expression ws2:_ ";" ws3:_
   {
-    return "return " + (expr||"") + ";";
+    return "return" + ws1 + expr + ws2 + ";" + ws3;
   }
 
 AssignmentStmt
-  =
-  e:AssignmentExpr
-  _
-  ";"
-  { return e + ";"; }
-
-AssignmentExpr
-  =
-  lhs:Assignable
-  _
-  op:AssignOp
-  _
-  rhs:Expression
+  = lhs:Assignable ws1:_ op:AssignOp ws2:_ rhs:Expression ws3:_ ";" ws4:_
   {
-    return lhs + " " + op + " " + rhs;
+    return lhs + ws1 + op + ws2 + rhs + ws3 + ";" + ws4;
   }
 
-AssignOp
-  =
-  "+=" / "-=" / "*=" / "/=" / "="
+AssignOp = "+=" / "-=" / "*=" / "/=" / "="
+
+ExprStmt
+  = expr:Expression ws:_ ";" ws2:_
+  { 
+    return expr + ws + ";" + ws2; 
+  }
 
 /* ===================================================== */
-/* EXPRESSIONS */
+/* Expressions */
 /* ===================================================== */
 
-Expression = Ternary
-
-Ternary
-  =
-  cond:LogicalOr
-  _
-  "?"
-  _
-  ifTrue:Expression
-  _
-  ":"
-  _
-  ifFalse:Expression
-  {
-    return cond + " ? " + ifTrue + " : " + ifFalse;
-  }
-  / LogicalOr
-
-LogicalOr
-  =
-  l:LogicalAnd
-  tail:(_ "||" _ LogicalAnd)*
-  {
-    return tail.reduce((a,t)=>a+" || "+t[3], l);
-  }
-
-LogicalAnd
-  =
-  l:Comparison
-  tail:(_ "&&" _ Comparison)*
-  {
-    return tail.reduce((a,t)=>a+" && "+t[3], l);
-  }
-
-Comparison
-  =
-  l:AddSub
-  tail:(_ CompOp _ AddSub)*
-  {
-    return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
-  }
-
-CompOp
-  =
-  "==" / "!=" / "<=" / ">=" / "<" / ">"
-
-AddSub
-  =
-  l:MulDiv
-  tail:(_ ("+"/"-") _ MulDiv)*
-  {
-    return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
-  }
-
-MulDiv
-  =
-  l:Unary
-  tail:(_ ("*" / "/" / "%") _ Unary)*
-  {
-    return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
-  }
-
-Postfix
-  =
-  base:Primary
-  op:("++" / "--")
-  {
-    return base + op;
-  }
-  / Primary
-
-Unary
-  =
-  "++" _ v:Unary { return "++"+v; }
-  / "--" _ v:Unary { return "--"+v; }
-  / "!" _ v:Unary { return "!"+v; }
-  / "-" _ v:Unary { return "-"+v; }
-  / Postfix
-
-Primary
-  =
-  base:(
-      "true" { return "true"; }
-    / "false" { return "false"; }
-    / "(" _ e:Expression _ ")" { return "(" + e + ")"; }
-    / ArrayConstructor
-    / TypeConstructor
-    / FuncCall
-    / Number
-    / id:Identifier { return mapVariable(id); }
-  )
-  tail:(_ AccessPart)*
-  {
-    return tail.reduce((acc, t) => {
-      const p = t[1];
-      return p.type === "member"
-        ? acc + "." + p.name
-        : acc + "[" + p.index + "]";
-    }, base);
-  }
-
-ArrayConstructor
-  =
-  t:BaseType
-  _
-  "[" _ size:Expression? _ "]"
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
-  {
-    // Strips out the `float[3]` / `float[]` prefix, translating into a native initializer list
-    return "{ " + (args ? args.join(", ") : "") + " }";
-  }
-
-TypeConstructor
-  =
-  name:("vec2"/"vec3"/"vec4"/"mat2"/"mat3"/"mat4")
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
-  {
-    return mapType(name) + "(" + (args ? args.join(", ") : "") + ")";
-  }
+Expression = FuncCall / Assignable / Number
 
 FuncCall
-  =
-  name:Identifier
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
+  = name:Identifier ws1:_ "(" ws2:_ args:ArgList? ws3:_ ")"
   {
-    return mapFuncCall(name, args);
+    // Reconstruct arguments with their internal whitespace
+    const argStr = args ? args : [];
+    return mapFuncCall(name, argStr);
   }
 
 ArgList
-  =
-  head:Expression
-  tail:(_ "," _ Expression)*
+  = head:Expression tail:(ws1:_ "," ws2:_ Expression)*
   {
-    return [head].concat(tail.map(x=>x[3]));
+    return [head].concat(tail.map(t => t[0] + "," + t[2] + t[3]));
   }
 
-/* ===================================================== */
-/* assignables */
-/* ===================================================== */
-
 Assignable
-  =
-  base:Identifier
-  tail:(_ AccessPart)*
+  = base:Identifier tail:(_ AccessPart)*
   {
-    const mappedBase = mapVariable(base);
-    return tail.reduce((acc,t)=>{
-      const p = t[1];
-      return p.type === "member"
-        ? acc + "." + p.name
-        : acc + "[" + p.index + "]";
-    }, mappedBase);
+    let out = mapIdentifier(base);
+    for (let t of tail) {
+      out += t[0] + t[1];
+    }
+    return out;
   }
 
 AccessPart
-  =
-  "." name:Identifier { return {type:"member", name}; }
-  / "[" _ idx:Expression _ "]" { return {type:"index", index:idx}; }
-
-ExprStmt
-  =
-  expr:Expression _
-  ";"
-  { return expr + ";"; }
+  = "." name:Identifier { return "." + name; }
+  / "[" ws1:_ idx:Expression ws2:_ "]" { return "[" + ws1 + idx + ws2 + "]"; }
 
 /* ===================================================== */
-/* types */
+/* Lexical Rules */
 /* ===================================================== */
 
-Type = BaseType
-
-BaseType
-  =
-  "float"
-  / "int"
-  / "uint"
-  / "bool"
-  / "vec2"
-  / "vec3"
-  / "vec4"
-  / "mat2"
-  / "mat3"
-  / "mat4"
-  / "void"
-  / Identifier
-
-// Parses expressions inside brackets so sizes like [3], [mySize], or [] are handled correctly
-ArraySuffix = "[" _ e:Expression? _ "]" { return "[" + (e ? e : "") + "]"; }
-
+Type = Identifier
+ArraySuffix = "[" _ Expression? _ "]" { return text(); }
 Identifier = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
-  =
-  num:$(
-      (
-        [0-9]+ "." [0-9]*
-      / "." [0-9]+
-      / [0-9]+
-      )
-      ([eE] [+\-]? [0-9]+)?
-  )
-  suffix:([fFuU])?
-  {
-    const isFloat = num.includes('.') || num.includes('e') || num.includes('E');
-    if (isFloat && !suffix) {
-      return num + "f";
-    }
-    return num + (suffix ? suffix : "");
-  }
+  = $( ( [0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+ ) ([eE] [+\-]? [0-9]+)? [fFuU]? )
 
 /* ===================================================== */
-/* whitespace */
+/* Whitespace & Comments (The Magic Sauce) */
 /* ===================================================== */
 
-_  = ( [ \t\r\n] / Comment )*
-__ = ( [ \t\r\n] / Comment )+
+_ "optional whitespace"
+  = ([ \t\r\n] / Comment)* { return text(); }
+
+__ "mandatory whitespace"
+  = ([ \t\r\n] / Comment)+ { return text(); }
+
+Comment
+  = SingleLineComment
+  / MultiLineComment
+
+SingleLineComment
+  = "//" [^\r\n]*
+
+MultiLineComment
+  = "/*" (!"*/" .)* "*/"
