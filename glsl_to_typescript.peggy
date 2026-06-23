@@ -17,13 +17,8 @@
     "normalize": "normalize", "length": "length", "distance": "distance"
   };
 
-  function prefixId(id) {
-    if (builtinMap[id] || typeMap[id] || id === "main" || id === "gl_Position" || id === "gl_FragColor" || id === "gl_FragCoord") return id;
-    return "compiled_" + id;
-  }
-
-  function mapType(t) { return typeMap[t] || prefixId(t); }
-  function mapFunc(f) { return builtinMap[f] || prefixId(f); }
+  function mapType(t) { return typeMap[t] || t; }
+  function mapFunc(f) { return builtinMap[f] || f; }
 }
 
 /* =====================================================

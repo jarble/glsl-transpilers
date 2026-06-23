@@ -64,15 +64,13 @@ Macro
 ===================================================== */
 
 StructDecl
-  = ws1:_ "struct" data:(ws2:__ id:IdentifierName { return {name: id, wsBeforeBrace: "", wsAfterStruct: ws2}; } / ws2:_ { return {name: null, wsBeforeBrace: ws2, wsAfterStruct: ""}; }) ws3:_ "{" members:StructMember* ws4:_ "}" varName:(ws5:__ vid:IdentifierName { return {ws: ws5, id: vid}; })? ws6:_ ";" {
-      const structName = data.name ? prefixId(data.name) : "";
-      const varStr = varName ? varName.ws + prefixId(varName.id) : "";
-      return ws1 + "struct" + (data.name ? data.wsAfterStruct + structName : "") + data.wsBeforeBrace + ws3 + "{" + members.join("") + ws4 + "}" + varStr + ws6 + ";";
+  = ws1:_ "struct" ws2:__ id:IdentifierName ws3:_ "{" members:StructMember* ws4:_ "}" ws5:_ ";" {
+      return ws1 + "struct" + ws2 + prefixId(id) + ws3 + "{" + members.join("") + ws4 + "}" + ws5 + ";";
   }
 
 StructMember
   = ws1:_ type:TypeName ws2:__ id:IdentifierName arraySize:ArraySuffix? ws3:_ ";" {
-      return ws1 + type + ws2 + id + (arraySize || "") + ws3 + ";";
+      return ws1 + type + ws2 + prefixId(id) + (arraySize || "") + ws3 + ";";
   }
 
 FuncDecl
@@ -240,7 +238,7 @@ IdentifierName
   = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
-  = $( ([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+) ([eE] [+-]? [0-9]+)? [fFuU]? )
+  = $([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+) $([eE] [+-]? [0-9]+)? $([fFuU]?)
 
 /* ===================================================== 
 // Whitespace & Comment Preservation
