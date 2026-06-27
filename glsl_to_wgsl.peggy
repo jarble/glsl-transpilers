@@ -13,249 +13,208 @@
     void: "void"
   };
 
-  const builtins = new Set([
-    "abs", "acos", "asin", "atan", "ceil", "cos", "exp", "floor",
-    "log", "max", "min", "pow", "sin", "sqrt", "tan", "round",
-    "clamp", "length", "normalize", "dot", "cross", "mix",
-    "step", "smoothstep", "reflect", "refract", "distance",
-    "gl_Position", "gl_FragColor", "gl_FragCoord", "gl_PointSize",
-    "gl_VertexID", "gl_InstanceID", "gl_FrontFacing",
-    "sampler2D", "texture2D"
-  ]);
-
-  // Appends "compiled_" unless it is a core GLSL concept
-  function formatId(name) {
-    if (builtins.has(name) || name.startsWith("gl_")) {
-        return name;
-    }
-    return "compiled_" + name;
-  }
-
-  // Maps types, ensuring user-defined structs also get the prefix
   function mapType(t) {
-    if (typeMap[t]) return typeMap[t];
-    return formatId(t);
-  }
-
-  // Handles dot-notation properties, protecting vector swizzles
-  function mapAccessPart(prop) {
-    if (/^[xyzwrgbastpq]{1,4}$/.test(prop)) {
-        return prop;
-    }
-    return formatId(prop);
-  }
-
-  function mapFuncCall(name, argsStr) {
-    if (typeMap[name]) {
-        return typeMap[name] + "(" + argsStr + ")";
-    }
-    if (builtins.has(name)) {
-        return name + "(" + argsStr + ")";
-    }
-    return formatId(name) + "(" + argsStr + ")";
+    return typeMap[t] || t;
   }
 }
 
-/* =====================================================
-   // Entry & Top Level
-   ===================================================== */
+/* ===================================================== 
+  Entry & Top Level 
+===================================================== 
+*/
 
 Start
-  = _ items:(TopLevel _)* {
-      return items.map(item => item[0]).join("\n\n");
-  }
+  = _ items:(TopLevel (_ TopLevel)*)? _ {
+      if (!items) return "";
+      return [items[0]].concat(items[1].map(t => t[1])).join("\n\n");
+    }
 
 TopLevel
-  = StructDecl
-  / FuncDecl
-  / VarDecl
-  / Comment
+  = FunctionDecl
+  / VarDeclStatement
 
-/* =====================================================
-   // Structs
-   ===================================================== */
+/* ===================================================== 
+  Functions 
+===================================================== 
+*/
 
-StructDecl
-  = "struct" __ name:Identifier _ "{" _ fields:StructFields _ "}" tail:(_ Identifier)? _ ";" _ c:Comment? {
-      let fName = formatId(name);
-      let res = "struct " + fName + " {\n" + fields + "\n}";
-      // Handle immediate instantiation
-      if (tail) {
-          res += "\nvar " + formatId(tail[1]) + ": " + fName + ";";
-      }
-      return res + (c ? " " + c : "");
-  }
-
-StructFields
-  = fields:(StructField _)* {
-      return fields.map(f => f[0]).join("\n");
-  }
-
-StructField
-  = c:Comment { 
-      return c.split('\n').map(line => "    " + line).join('\n'); 
-  }
-  / type:Type __ name:Identifier array:ArraySuffix? _ ";" _ c:Comment? {
-      let wgslType = mapType(type);
-      if (array !== null) {
-          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
-      }
-      return "    " + formatId(name) + ": " + wgslType + "," + (c ? " " + c : "");
-  }
-
-/* =====================================================
-   // Functions & Parameters
-   ===================================================== */
-
-FuncDecl
-  = type:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:Statements _ "}" {
-      const p = params ? params : "";
-      const retType = mapType(type);
-      const retStr = retType === "void" ? "" : " -> " + retType;
-      return "fn " + formatId(name) + "(" + p + ")" + retStr + " {\n" + body + "\n}";
-  }
+FunctionDecl
+  = type:BaseType __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:Statements _ "}" {
+      const mappedType = mapType(type);
+      const retStr = mappedType !== "void" ? " -> " + mappedType : "";
+      const paramStr = params ? params.join(", ") : "";
+      
+      // WGSL uses: fn name(param: type) -> return_type { ... }
+      return "fn compiled_" + name + "(" + paramStr + ")" + retStr + " {\n" + body + "\n}";
+    }
 
 ParamList
-  = head:ParamDecl tail:(_ "," _ ParamDecl)* {
-      return head + tail.map(t => ", " + t[3]).join("");
-  }
+  = head:Param tail:(_ "," _ Param)* {
+      return [head].concat(tail.map(t => t[3]));
+    }
 
-ParamDecl
-  = mod:("inout" / "out" / "in")? _ type:Type __ name:Identifier array:ArraySuffix? {
-      let wgslType = mapType(type);
-      if (array !== null) {
-          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
-      }
-      if (mod === "inout" || mod === "out") {
-          wgslType = "ptr<function, " + wgslType + ">";
-      }
-      return formatId(name) + ": " + wgslType;
-  }
+Param
+  = type:BaseType __ name:Identifier {
+      return "compiled_" + name + ": " + mapType(type);
+    }
 
-/* =====================================================
-   // Statements & Variables
-   ===================================================== */
+/* ===================================================== 
+  Statements & Declarations 
+===================================================== 
+*/
 
 Statements
   = stmts:(Statement _)* {
       return stmts.map(s => s[0]).join("\n");
-  }
+    }
 
 Statement
-  = c:Comment { 
-      return c.split('\n').map(line => "    " + line).join('\n'); 
-  }
-  / v:VarDecl { return "    " + v; }
-  / e:ExprStmt { return "    " + e; }
-  / r:ReturnStmt { return "    " + r; }
+  = VarDeclStatement
+  / ExprStmt
+  / ReturnStmt
 
-ReturnStmt
-  = "return" __ expr:Expression? _ ";" _ c:Comment? {
-      return "return " + (expr ? expr : "") + ";" + (c ? " " + c : "");
-  }
+VarDeclStatement
+  = type:BaseType __ head:SingleVarDecl tail:(_ "," _ SingleVarDecl)* _ ";" {
+      const mappedType = mapType(type);
+      let decls = [head];
+      
+      if (tail && tail.length > 0) {
+        decls = decls.concat(tail.map(t => t[3]));
+      }
+
+      return decls.map(decl => {
+        let finalType = mappedType;
+        
+        // If an array size was found, wrap the mapped WGSL type
+        if (decl.size) {
+            finalType = "array<" + mappedType + ", " + decl.size + ">";
+        }
+        
+        // Injects the compiled_ prefix and formats the WGSL variable declaration
+        return "var compiled_" + decl.name + ": " + finalType + " = " + decl.init + ";";
+      }).join("\n");
+    }
+
+SingleVarDecl
+  = name:Identifier _ isArray:("[" _ Number _ "]")? _ "=" _ init:Expression {
+      return { 
+        name: name, 
+        size: isArray ? isArray[2] : null, 
+        init: init 
+      };
+    }
 
 ExprStmt
-  = expr:Expression _ ";" _ c:Comment? { 
-      return expr + ";" + (c ? " " + c : ""); 
-  }
+  = expr:Expression _ ";" { return expr + ";"; }
 
-VarDecl
-  = type:Type __ name:Identifier array:ArraySuffix? _ init:("=" _ Initializer)? _ ";" _ c:Comment? {
-      let wgslType = mapType(type);
-      if (array !== null) {
-          wgslType = "array<" + wgslType + (array !== "" ? ", " + array : "") + ">";
-      }
-      let decl = "var " + formatId(name) + ": " + wgslType;
-      if (init) {
-          decl += " = " + init[2];
-      }
-      return decl + ";" + (c ? " " + c : "");
-  }
+ReturnStmt
+  = "return" __ expr:Expression _ ";" { return "return " + expr + ";"; }
 
-ArraySuffix
-  = "[" _ size:Expression? _ "]" {
-      return size ? size : "";
-  }
-
-Initializer
-  = ArrayInit / Expression
-
-ArrayInit
-  = type:Type? _ "[]" _ "(" _ args:ArgList _ ")" {
-      return "array(" + args + ")";
-  }
-  / "{" _ args:ArgList _ "}" {
-      return "array(" + args + ")";
-  }
-
-/* =====================================================
-   // Expressions
-   ===================================================== */
+/* ===================================================== 
+  Expressions & Operations 
+===================================================== 
+*/
 
 Expression
-  = head:Term tail:(_ BinaryOp _ Term)* {
-      return head + tail.map(t => " " + t[1] + " " + t[3]).join("");
-  }
+  = ConditionalExpression
 
-BinaryOp
-  = "+=" / "-=" / "*=" / "/=" / "==" / "!=" / "<=" / ">=" / "&&" / "||" / "+" / "-" / "*" / "/" / "<" / ">" / "="
+ConditionalExpression
+  = cond:LogicalOrExpression _ "?" _ trueExpr:Expression _ ":" _ falseExpr:ConditionalExpression {
+      // Maps (cond ? true : false) -> select(false, true, cond)
+      return "select(" + falseExpr + ", " + trueExpr + ", " + cond + ")";
+    }
+  / LogicalOrExpression
 
-Term
-  = FunctionCall
-  / PostfixExpr
-  / "(" _ expr:Expression _ ")" { return "(" + expr + ")"; }
+LogicalOrExpression
+  = head:LogicalAndExpression tail:(_ "||" _ LogicalAndExpression)* {
+      return tail.reduce((result, element) => result + " || " + element[3], head);
+    }
+
+LogicalAndExpression
+  = head:EqualityExpression tail:(_ "&&" _ EqualityExpression)* {
+      return tail.reduce((result, element) => result + " && " + element[3], head);
+    }
+
+EqualityExpression
+  = head:RelationalExpression tail:(_ ("==" / "!=") _ RelationalExpression)* {
+      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
+    }
+
+RelationalExpression
+  = head:AdditiveExpression tail:(_ ("<=" / ">=" / "<" / ">") _ AdditiveExpression)* {
+      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
+    }
+
+AdditiveExpression
+  = head:MultiplicativeExpression tail:(_ ("+" / "-") _ MultiplicativeExpression)* {
+      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
+    }
+
+MultiplicativeExpression
+  = head:PrimaryExpression tail:(_ ("*" / "/") _ PrimaryExpression)* {
+      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
+    }
+
+PrimaryExpression
+  = ArrayConstructor
+  / FunctionCall
+  / FloatLiteral
   / Number
-  / id:Identifier { return formatId(id); }
+  / Identifier { return "compiled_" + text(); }
+  / "(" _ expr:Expression _ ")" { return "(" + expr + ")"; }
 
-PostfixExpr
-  = name:Identifier parts:AccessPart+ {
-      return formatId(name) + parts.join("");
-  }
+/* ===================================================== 
+  Constructors & Calls
+===================================================== 
+*/
 
-AccessPart
-  = "." prop:Identifier { return "." + mapAccessPart(prop); }
-  / "[" _ idx:Expression _ "]" { return "[" + idx + "]"; }
+ArrayConstructor
+  = type:BaseType _ "[" _ size:Number _ "]" _ "(" _ args:ArgList? _ ")" {
+      const mappedType = mapType(type);
+      const argStr = args ? args.join(", ") : "";
+      
+      // Formats as array<f32, 3>(1.0f, 2.0f, 3.0f)
+      return "array<" + mappedType + ", " + size + ">(" + argStr + ")";
+    }
 
 FunctionCall
   = name:Identifier _ "(" _ args:ArgList? _ ")" {
-      return mapFuncCall(name, args ? args : "");
-  }
+      const argStr = args ? args.join(", ") : "";
+      
+      // Prevent double prefixing on WGSL built-ins we map directly
+      if (name === "select" || name === "array") {
+          return name + "(" + argStr + ")"; 
+      }
+      return "compiled_" + name + "(" + argStr + ")";
+    }
 
 ArgList
   = head:Expression tail:(_ "," _ Expression)* {
-      return head + tail.map(t => ", " + t[3]).join("");
-  }
+      return [head].concat(tail.map(t => t[3]));
+    }
 
-/* =====================================================
-   // Tokens & Types
-   ===================================================== */
+/* ===================================================== 
+  Lexical Rules 
+===================================================== 
+*/
 
-Type
-  = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / "void" / Identifier
+BaseType
+  = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / "void"
 
 Identifier
   = $([a-zA-Z_][a-zA-Z0-9_]*)
 
+FloatLiteral
+  = num:$( ( [0-9]+ "." [0-9]* / "." [0-9]+ ) ([eE] [+-]? [0-9]+)? ) suffix:[fF]? {
+      // WGSL requires trailing 'f' for f32 literals
+      return num + "f";
+    }
+
 Number
-  = num:$(
-      [0-9]+ "." [0-9]*
-    / "." [0-9]+
-    / [0-9]+
-  ) suffix:[fFuU]? {
-      const isFloat = num.includes('.');
-      if (isFloat && !suffix) {
-          return num + "f";
-      }
-      return num + (suffix ? suffix : ""); 
-  }
+  = $([0-9]+)
 
-Comment
-  = c:$("//" (![\n\r] .)*) { return c; }
-  / c:$("/*" (!"*/" .)* "*/") { return c; }
+_ "optional whitespace"
+  = [ \t\n\r]*
 
-/* =====================================================
-   // Whitespace
-   ===================================================== */
-
-_  = ( [ \t\r\n] )*
-__ = ( [ \t\r\n] )+
+__ "mandatory whitespace"
+  = [ \t\n\r]+
