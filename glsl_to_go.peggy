@@ -178,7 +178,7 @@ Block
   = "{" _ stmts:(Statement)* _ "}" { return `{\n${stmts.join("\n")}\n}`; }
 
 Statement
-  = Block / IfStmt / ForStmt / WhileStmt / DoWhileStmt / BreakStmt / ContinueStmt / ReturnStmt / LocalVarDecl / ExprStmt / CommentStmt
+  = Block / IfStmt / SwitchStmt / ForStmt / WhileStmt / DoWhileStmt / BreakStmt / ContinueStmt / ReturnStmt / LocalVarDecl / ExprStmt / CommentStmt
 
 BreakStmt = pre:_ "break" _ ";" { return pre + "break"; }
 ContinueStmt = pre:_ "continue" _ ";" { return pre + "continue"; }
@@ -190,6 +190,22 @@ ExprStmt
 IfStmt
   = pre:_ "if" _ "(" _ cond:Expression _ ")" _ thenBlock:Statement elsePart:(_ "else" _ Statement)? {
       return pre + `if ${cond} ${thenBlock}` + (elsePart ? ` else ${elsePart[3]}` : "");
+  }
+
+SwitchStmt
+  = pre:_ "switch" _ "(" _ expr:Expression _ ")" _ "{" _ cases:(CaseClause _)* "}" {
+      return pre + `switch ${expr} {\n` + cases.map(x => x[0]).join("") + `\n}`;
+  }
+
+CaseClause
+  = "case" __ v:Expression ":" _ body:((Statement _)+)? {
+      // Strips trailing 'break;' or 'break' logic, mapping perfectly to idiomatic Go
+      const stmts = body ? body.map(x => x[0].replace(/break\s*;?\s*$/, "") + x[1]).join("") : "";
+      return `case ${v}:\n${stmts}`;
+  }
+  / "default" ":" _ body:((Statement _)+)? {
+      const stmts = body ? body.map(x => x[0].replace(/break\s*;?\s*$/, "") + x[1]).join("") : "";
+      return `default:\n${stmts}`;
   }
 
 ForStmt
