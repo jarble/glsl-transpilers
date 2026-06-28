@@ -13,7 +13,6 @@
     "void": "void"
   };
 
-  // Standard GLSL built-ins that should bypass the "compiled_" prefix
   const builtins = new Set([
     "abs", "acos", "asin", "atan", "ceil", "cos", "exp", "floor",
     "log", "max", "min", "pow", "sin", "sqrt", "tan", "sign",
@@ -27,10 +26,7 @@
   }
 
   function prefixId(id) {
-    // Leave built-in math, standard types, and entry points alone
     if (builtins.has(id) || typeMap[id]) return id;
-    
-    // Append the prefix to all user-defined functions and variables
     return "compiled_" + id;
   }
 }
@@ -51,21 +47,20 @@ TopLevel
 
 Macro
   = ws:_ "#" mws:_ "define" reqWS:__ id:IdentifierName val:(![\r\n] .)* {
-      // Intercepts definitions and prefixes the identifier name
       return ws + "#" + mws + "define" + reqWS + prefixId(id) + val.map(c => c[1]).join("");
   }
   / ws:_ "#" val:(![\r\n] .)* {
-      // Passes through other macros natively
       return ws + "#" + val.map(c => c[1]).join("");
   }
 
 /* ===================================================== 
-// Declarations
+// Declarations (Structs, Functions, Variables)
 ===================================================== */
 
 StructDecl
-  = ws1:_ "struct" ws2:__ id:IdentifierName ws3:_ "{" members:StructMember* ws4:_ "}" ws5:_ ";" {
-      return ws1 + "struct" + ws2 + prefixId(id) + ws3 + "{" + members.join("") + ws4 + "}" + ws5 + ";";
+  = ws1:_ "struct" namePart:(ws2:__ id:IdentifierName { return ws2 + prefixId(id); })? ws3:_ "{" members:StructMember* ws4:_ "}" instPart:(ws5:_ inst:IdentifierName { return ws5 + prefixId(inst); })? ws6:_ ";" {
+      // Conditionally maps both named structs and anonymous instance declarations
+      return ws1 + "struct" + (namePart || "") + ws3 + "{" + members.join("") + ws4 + "}" + (instPart || "") + ws6 + ";";
   }
 
 StructMember
@@ -85,7 +80,6 @@ ParamList
 
 ParamDecl
   = mod:(ParamModifier __)? type:TypeName ws1:__ id:IdentifierName arraySize:ArraySuffix? {
-      // GLSL modifiers (in, out, inout) are stripped for standard C parameter syntax
       return type + ws1 + prefixId(id) + (arraySize || "");
   }
 
@@ -162,11 +156,16 @@ Expression
   = AssignmentExpr
 
 AssignmentExpr
-  = left:LogicalOrExpr right:(ws1:_ op:AssignOp ws2:_ expr:AssignmentExpr { return ws1 + op + ws2 + expr; })? {
+  = left:TernaryExpr right:(ws1:_ op:AssignOp ws2:_ expr:AssignmentExpr { return ws1 + op + ws2 + expr; })? {
       return left + (right || "");
   }
 
 AssignOp = "=" / "+=" / "-=" / "*=" / "/="
+
+TernaryExpr
+  = cond:LogicalOrExpr tail:(ws1:_ "?" ws2:_ trueExpr:Expression ws3:_ ":" ws4:_ falseExpr:AssignmentExpr { return ws1 + "?" + ws2 + trueExpr + ws3 + ":" + ws4 + falseExpr; })? {
+      return cond + (tail || "");
+  }
 
 LogicalOrExpr = head:LogicalAndExpr tail:(ws1:_ "||" ws2:_ expr:LogicalAndExpr { return ws1 + "||" + ws2 + expr; })* { return head + tail.join(""); }
 LogicalAndExpr = head:EqualityExpr tail:(ws1:_ "&&" ws2:_ expr:EqualityExpr { return ws1 + "&&" + ws2 + expr; })* { return head + tail.join(""); }
@@ -201,7 +200,6 @@ PrimaryExpr
 
 ArrayConstructor
   = ws1:_ id:IdentifierName ws2:_ "[" ws3:_ size:Expression? ws4:_ "]" ws5:_ "(" args:ArgList? ws6:_ ")" {
-      // Maps float[3](...) or vec2[](...) to standard C99 Compound Literals: (float[3]){ ... }
       let arrType = mapType(id) + "[" + (size ? size : "") + "]";
       let argStr = args ? args : "";
       return ws1 + "(" + arrType + ")" + ws2 + "{" + argStr + ws6 + "}";
@@ -209,7 +207,6 @@ ArrayConstructor
 
 TypeConstructor
   = ws1:_ type:BuiltinType ws2:_ "(" args:ArgList? ws3:_ ")" {
-      // Maps vec2(...) to standard C99 struct initializers: (vec2){ ... }
       let argStr = args ? args : "";
       return ws1 + "(" + type + ")" + ws2 + "{" + argStr + ws3 + "}";
   }
@@ -238,7 +235,7 @@ IdentifierName
   = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
-  = $([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+) $([eE] [+-]? [0-9]+)? $([fFuU]?)
+  = $( ([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+) ([eE] [+-]? [0-9]+)? [fFuU]? )
 
 /* ===================================================== 
 // Whitespace & Comment Preservation
