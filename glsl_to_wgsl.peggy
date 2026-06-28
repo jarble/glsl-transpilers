@@ -4,217 +4,294 @@
     int: "i32",
     uint: "u32",
     bool: "bool",
-    vec2: "vec2<f32>",
-    vec3: "vec3<f32>",
-    vec4: "vec4<f32>",
-    mat2: "mat2x2<f32>",
-    mat3: "mat3x3<f32>",
-    mat4: "mat4x4<f32>",
+    vec2: "vec2f",
+    vec3: "vec3f",
+    vec4: "vec4f",
+    mat2: "mat2x2f",
+    mat3: "mat3x3f",
+    mat4: "mat4x4f",
     void: "void"
   };
 
-  function mapType(t) {
+  function mapType(t){
     return typeMap[t] || t;
+  }
+
+  // Intercepts built-in GLSL variables and functions to map to WGSL
+  function mapFuncCall(name, args) {
+    args = args || [];
+    
+    // Polyfill GLSL math built-ins to WGSL equivalents if needed
+    switch(name) {
+        case "mix": return "mix(" + args.join(", ") + ")";
+        case "fract": return "fract(" + args.join(", ") + ")";
+        case "inversesqrt": return "inverseSqrt(" + args.join(", ") + ")";
+        default: return name + "(" + args.join(", ") + ")";
+    }
   }
 }
 
-/* ===================================================== 
-  Entry & Top Level 
-===================================================== 
-*/
+/* =====================================================
+   Entry & Top Level
+   ===================================================== */
 
 Start
   = _ items:(TopLevel (_ TopLevel)*)? _ {
-      if (!items) return "";
-      return [items[0]].concat(items[1].map(t => t[1])).join("\n\n");
-    }
+    if (!items) return "";
+    return items[0] + items[1].map(i => i[0] + i[1]).join("");
+  }
 
 TopLevel
   = FunctionDecl
-  / VarDeclStatement
+  / StructDecl
+  / GlobalVarDecl
 
-/* ===================================================== 
-  Functions 
-===================================================== 
-*/
+StructDecl
+  = "struct" __ name:Identifier _ "{" _ fields:StructField* _ "}" _ instance:Identifier? _ ";" {
+    let structDef = "struct " + name + " {\n" + fields.join("") + "\n}";
+    if (instance) {
+        return structDef + "\nvar<private> " + instance + ": " + name + ";";
+    }
+    return structDef;
+  }
+
+StructField
+  = pre:_ type:Type __ name:Identifier _ ";" _ {
+    // WGSL structs use comma-separated fields
+    return pre + name + ": " + mapType(type) + ",\n";
+  }
+
+GlobalVarDecl
+  = type:Type __ name:Identifier init:(_ "=" _ Expression)? _ ";" {
+    return "var<private> " + name + ": " + mapType(type) + (init ? " = " + init[3] : "") + ";";
+  }
 
 FunctionDecl
-  = type:BaseType __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:Statements _ "}" {
-      const mappedType = mapType(type);
-      const retStr = mappedType !== "void" ? " -> " + mappedType : "";
-      const paramStr = params ? params.join(", ") : "";
-      
-      // WGSL uses: fn name(param: type) -> return_type { ... }
-      return "fn compiled_" + name + "(" + paramStr + ")" + retStr + " {\n" + body + "\n}";
-    }
+  = type:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ "{" _ body:Statements _ "}" {
+    let retType = mapType(type);
+    let retStr = retType === "void" ? "" : " -> " + retType;
+    return "fn " + name + "(" + (params || "") + ")" + retStr + " {\n" + body + "}";
+  }
 
 ParamList
   = head:Param tail:(_ "," _ Param)* {
-      return [head].concat(tail.map(t => t[3]));
-    }
+    return head + tail.map(t => ", " + t[3]).join("");
+  }
 
 Param
-  = type:BaseType __ name:Identifier {
-      return "compiled_" + name + ": " + mapType(type);
-    }
+  = type:Type __ name:Identifier {
+    return name + ": " + mapType(type);
+  }
 
-/* ===================================================== 
-  Statements & Declarations 
-===================================================== 
-*/
+/* =====================================================
+   Statements & Control Flow
+   ===================================================== */
 
 Statements
-  = stmts:(Statement _)* {
-      return stmts.map(s => s[0]).join("\n");
-    }
+  = stmts:(Statement / _)* {
+    return stmts.join("");
+  }
 
 Statement
-  = VarDeclStatement
-  / ExprStmt
+  = Block
+  / VarDecl
+  / IfStmt
+  / ForStmt
+  / WhileStmt
+  / SwitchStmt
   / ReturnStmt
+  / ExprStmt
 
-VarDeclStatement
-  = type:BaseType __ head:SingleVarDecl tail:(_ "," _ SingleVarDecl)* _ ";" {
-      const mappedType = mapType(type);
-      let decls = [head];
-      
-      if (tail && tail.length > 0) {
-        decls = decls.concat(tail.map(t => t[3]));
-      }
+Block
+  = "{" _ stmts:Statements _ "}" {
+    return "{\n" + stmts + "}";
+  }
 
-      return decls.map(decl => {
-        let finalType = mappedType;
-        
-        // If an array size was found, wrap the mapped WGSL type
-        if (decl.size) {
-            finalType = "array<" + mappedType + ", " + decl.size + ">";
-        }
-        
-        // Injects the compiled_ prefix and formats the WGSL variable declaration
-        return "var compiled_" + decl.name + ": " + finalType + " = " + decl.init + ";";
-      }).join("\n");
+VarDecl
+  = type:Type __ name:Identifier init:(_ "=" _ Expression)? _ ";" {
+    return "var " + name + ": " + mapType(type) + (init ? " = " + init[3] : "") + ";";
+  }
+
+IfStmt
+  = "if" _ "(" _ cond:Expression _ ")" _ trueBlock:Statement falseBlock:(_ "else" _ Statement)? {
+    let tb = trueBlock.trim().startsWith("{") ? trueBlock : "{\n" + trueBlock + "\n}";
+    let res = "if " + cond + " " + tb;
+    if (falseBlock) {
+      let fb = falseBlock[3].trim().startsWith("{") ? falseBlock[3] : "{\n" + falseBlock[3] + "\n}";
+      res += " else " + fb;
     }
+    return res;
+  }
 
-SingleVarDecl
-  = name:Identifier _ isArray:("[" _ Number _ "]")? _ "=" _ init:Expression {
-      return { 
-        name: name, 
-        size: isArray ? isArray[2] : null, 
-        init: init 
-      };
+ForStmt
+  = "for" _ "(" _ init:(VarDecl / ExprStmt / ";") _ cond:Expression? _ ";" _ update:Expression? _ ")" _ body:Statement {
+    let initStr = init === ";" ? "" : init.trim().replace(/;$/, "");
+    let b = body.trim().startsWith("{") ? body : "{\n" + body + "\n}";
+    // WGSL loops drop the condition parentheses
+    return "for(var " + initStr + "; " + (cond || "") + "; " + (update || "") + ") " + b;
+  }
+
+WhileStmt
+  = "while" _ "(" _ cond:Expression _ ")" _ body:Statement {
+    let b = body.trim().startsWith("{") ? body : "{\n" + body + "\n}";
+    return "while " + cond + " " + b;
+  }
+
+SwitchStmt
+  = "switch" _ "(" _ expr:Expression _ ")" _ "{" _ clauses:SwitchClause* _ "}" {
+    // WGSL drops the parentheses around the switch expression
+    return "switch " + expr + " {" + clauses.join("") + "\n}";
+  }
+
+SwitchClause
+  = pre:_ "case" __ val:Expression _ ":" _ stmts:CaseStmts {
+    // Injects the WGSL-required '{'
+    return pre + "case " + val + ": {" + stmts + pre + "}";
+  }
+  / pre:_ "default" _ ":" _ stmts:CaseStmts {
+    return pre + "default: {" + stmts + pre + "}";
+  }
+
+CaseStmts
+  = items:( !("case" __ / "default" _ ":" / "}") item:(Statement / _) { return item; } )* {
+    function flatten(arr) {
+      return Array.isArray(arr) ? arr.map(flatten).join("") : arr;
     }
-
-ExprStmt
-  = expr:Expression _ ";" { return expr + ";"; }
+    let body = flatten(items);
+    // Strip trailing GLSL 'break;' statements
+    return body.replace(/\bbreak\s*;/g, "");
+  }
 
 ReturnStmt
-  = "return" __ expr:Expression _ ";" { return "return " + expr + ";"; }
+  = "return" _ expr:Expression? _ ";" {
+    return "return" + (expr ? " " + expr : "") + ";";
+  }
 
-/* ===================================================== 
-  Expressions & Operations 
-===================================================== 
-*/
+ExprStmt
+  = expr:Expression _ ";" {
+    return expr + ";";
+  }
+
+/* =====================================================
+   Expressions
+   ===================================================== */
 
 Expression
-  = ConditionalExpression
+  = AssignmentExpr
 
-ConditionalExpression
-  = cond:LogicalOrExpression _ "?" _ trueExpr:Expression _ ":" _ falseExpr:ConditionalExpression {
-      // Maps (cond ? true : false) -> select(false, true, cond)
-      return "select(" + falseExpr + ", " + trueExpr + ", " + cond + ")";
-    }
-  / LogicalOrExpression
+AssignmentExpr
+  = left:PostfixExpr _ op:("="/"+="/"-="/"*="/"/=") _ right:AssignmentExpr {
+    return left + " " + op + " " + right;
+  }
+  / LogicOrExpr
 
-LogicalOrExpression
-  = head:LogicalAndExpression tail:(_ "||" _ LogicalAndExpression)* {
-      return tail.reduce((result, element) => result + " || " + element[3], head);
-    }
+LogicOrExpr
+  = head:LogicAndExpr tail:(_ "||" _ LogicAndExpr)* {
+    return head + tail.map(t => " || " + t[3]).join("");
+  }
 
-LogicalAndExpression
-  = head:EqualityExpression tail:(_ "&&" _ EqualityExpression)* {
-      return tail.reduce((result, element) => result + " && " + element[3], head);
-    }
+LogicAndExpr
+  = head:EqualityExpr tail:(_ "&&" _ EqualityExpr)* {
+    return head + tail.map(t => " && " + t[3]).join("");
+  }
 
-EqualityExpression
-  = head:RelationalExpression tail:(_ ("==" / "!=") _ RelationalExpression)* {
-      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
-    }
+EqualityExpr
+  = head:RelationalExpr tail:(_ ("=="/"!=") _ RelationalExpr)* {
+    return head + tail.map(t => " " + t[1] + " " + t[3]).join("");
+  }
 
-RelationalExpression
-  = head:AdditiveExpression tail:(_ ("<=" / ">=" / "<" / ">") _ AdditiveExpression)* {
-      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
-    }
+RelationalExpr
+  = head:AdditiveExpr tail:(_ ("<="/"<"/">="/">") _ AdditiveExpr)* {
+    return head + tail.map(t => " " + t[1] + " " + t[3]).join("");
+  }
 
-AdditiveExpression
-  = head:MultiplicativeExpression tail:(_ ("+" / "-") _ MultiplicativeExpression)* {
-      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
-    }
+AdditiveExpr
+  = head:MultiplicativeExpr tail:(_ ("+"/"-") _ MultiplicativeExpr)* {
+    return head + tail.map(t => " " + t[1] + " " + t[3]).join("");
+  }
 
-MultiplicativeExpression
-  = head:PrimaryExpression tail:(_ ("*" / "/") _ PrimaryExpression)* {
-      return tail.reduce((result, element) => result + " " + element[1] + " " + element[3], head);
-    }
+MultiplicativeExpr
+  = head:UnaryExpr tail:(_ ("*"/"/") _ UnaryExpr)* {
+    return head + tail.map(t => " " + t[1] + " " + t[3]).join("");
+  }
 
-PrimaryExpression
-  = ArrayConstructor
-  / FunctionCall
-  / FloatLiteral
-  / Number
-  / Identifier { return "compiled_" + text(); }
-  / "(" _ expr:Expression _ ")" { return "(" + expr + ")"; }
+UnaryExpr
+  = op:("+"/"-"/"!") _ expr:UnaryExpr {
+    return op + expr;
+  }
+  / PostfixExpr
 
-/* ===================================================== 
-  Constructors & Calls
-===================================================== 
-*/
+PostfixExpr
+  = head:PrimaryExpr tail:PostfixPart* {
+    return tail.reduce((acc, part) => part(acc), head);
+  }
 
-ArrayConstructor
-  = type:BaseType _ "[" _ size:Number _ "]" _ "(" _ args:ArgList? _ ")" {
-      const mappedType = mapType(type);
-      const argStr = args ? args.join(", ") : "";
-      
-      // Formats as array<f32, 3>(1.0f, 2.0f, 3.0f)
-      return "array<" + mappedType + ", " + size + ">(" + argStr + ")";
-    }
-
-FunctionCall
-  = name:Identifier _ "(" _ args:ArgList? _ ")" {
-      const argStr = args ? args.join(", ") : "";
-      
-      // Prevent double prefixing on WGSL built-ins we map directly
-      if (name === "select" || name === "array") {
-          return name + "(" + argStr + ")"; 
-      }
-      return "compiled_" + name + "(" + argStr + ")";
-    }
+PostfixPart
+  = _ "[" _ idx:Expression _ "]" {
+    return (acc) => acc + "[" + idx + "]";
+  }
+  / _ "." _ prop:Identifier {
+    return (acc) => acc + "." + prop;
+  }
+  / _ "(" _ args:ArgList? _ ")" {
+    return (acc) => mapFuncCall(acc, args);
+  }
+  / _ "++" {
+    return (acc) => acc + " = " + acc + " + 1"; // WGSL doesn't support ++ as an expression
+  }
+  / _ "--" {
+    return (acc) => acc + " = " + acc + " - 1";
+  }
 
 ArgList
   = head:Expression tail:(_ "," _ Expression)* {
-      return [head].concat(tail.map(t => t[3]));
-    }
+    return [head].concat(tail.map(t => t[3]));
+  }
 
-/* ===================================================== 
-  Lexical Rules 
-===================================================== 
-*/
+PrimaryExpr
+  = Number
+  / Identifier
+  / "(" _ expr:Expression _ ")" { return "(" + expr + ")"; }
 
-BaseType
-  = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / "void"
+/* =====================================================
+   Types, Tokens & Whitespace
+   ===================================================== */
+
+Type
+  = "void" / "float" / "int" / "uint" / "bool" 
+  / "vec2" / "vec3" / "vec4" 
+  / "mat2" / "mat3" / "mat4" 
+  / Identifier
 
 Identifier
   = $([a-zA-Z_][a-zA-Z0-9_]*)
 
-FloatLiteral
-  = num:$( ( [0-9]+ "." [0-9]* / "." [0-9]+ ) ([eE] [+-]? [0-9]+)? ) suffix:[fF]? {
-      // WGSL requires trailing 'f' for f32 literals
+Number
+  = num:$(
+      ([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+)
+      ([eE] [+-]? [0-9]+)?
+    )
+    suffix:([fFuU])?
+  {
+    // Auto-append 'f' to decimals without a suffix for WGSL float typing
+    const isFloat = num.includes('.') || num.includes('e') || num.includes('E');
+    if (isFloat && !suffix) {
       return num + "f";
     }
-
-Number
-  = $([0-9]+)
+    return num + (suffix ? suffix : "");
+  }
 
 _ "optional whitespace"
-  = [ \t\n\r]*
+  = (WhiteSpace / MultiLineComment / SingleLineComment)* { return text(); }
 
 __ "mandatory whitespace"
-  = [ \t\n\r]+
+  = (WhiteSpace / MultiLineComment / SingleLineComment)+ { return text(); }
+
+WhiteSpace
+  = [ \t\n\r]
+
+SingleLineComment
+  = "//" (![\n\r] .)*
+
+MultiLineComment
+  = "/*" (!"*/" .)* "*/"
