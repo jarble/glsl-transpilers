@@ -1,21 +1,13 @@
 {
   const typeMap = {
-    float: "number", int: "number", uint: "number", bool: "boolean",
-    vec2: "Vector2", vec3: "Vector3", vec4: "Vector4",
-    mat2: "Matrix2", mat3: "Matrix3", mat4: "Matrix4", void: "void"
+    "float": "number", "int": "number", "uint": "number", "bool": "boolean",
+    "vec2": "Vector2", "vec3": "Vector3", "vec4": "Vector4",
+    "mat2": "Matrix2", "mat3": "Matrix3", "mat4": "Matrix4",
+    "void": "void"
   };
 
-  const builtInVars = new Set([
-    "gl_Position", "gl_FragColor", "gl_FragCoord", "gl_FrontFacing",
-    "gl_PointSize", "gl_VertexID", "gl_InstanceID"
-  ]);
-
-  function mapType(t) { return typeMap[t] || t; }
-
-  // Appends "compiled_" to all user-defined variables and functions
-  function mapVariable(name) {
-    if (builtInVars.has(name)) return name;
-    return "compiled_" + name;
+  function mapType(t) { 
+    return typeMap[t] || t; 
   }
 
   // Translates built-in GLSL functions directly into TS inline expressions
@@ -65,34 +57,24 @@
       case "normalize": return `normalize(${a})`;
       case "reflect": return `reflect(${a}, ${b})`;
 
-      // Constructors and User-Defined
-      case "vec2":
-      case "vec3":
-      case "vec4":
-      case "mat2":
-      case "mat3":
-      case "mat4":
-        return `new ${typeMap[name]}(${safeArgs.join(", ")})`;
       default:
-        return `${mapVariable(name)}(${safeArgs.join(", ")})`;
+        return `${name}(${safeArgs.join(", ")})`;
     }
   }
 }
 
-/* ===================================================== */
-/* Entry */
-/* ===================================================== */
-
+/* =====================================================
+   Entry Point
+   ===================================================== */
 Start
-  = _ items:(TopLevel*) _ { return items.join("\n"); }
+  = _ items:(TopLevel)* _ { return items.join("\n"); }
 
 TopLevel
   = StructDecl / GlobalVarDecl / FunctionDecl / MacroDecl / CommentStmt
 
-/* ===================================================== */
-/* Whitespace & Comments (Captured for preservation) */
-/* ===================================================== */
-
+/* =====================================================
+   Whitespace & Comments (Captured for preservation)
+   ===================================================== */
 CommentStmt = pre:_ c:Comment { return pre + c; }
 Comment = SingleLineComment / MultiLineComment
 
@@ -102,59 +84,57 @@ MultiLineComment = c:$("/*" (!"*/" .)* "*/") { return c; }
 _ = ws:([ \t\r\n] / Comment)* { return ws.join(""); }
 __ = ws:([ \t\r\n] / Comment)+ { return ws.join(""); }
 
-/* ===================================================== */
-/* Structs */
-/* ===================================================== */
-
+/* =====================================================
+   Structs
+   ===================================================== */
 StructDecl
-  = pre:_ "struct" headName:(__ Identifier)? _ "{" _ fields:(StructField)* _ "}" _ tailName:Identifier? _ ";" {
+  = pre:_ "struct" headName:(__ Identifier)? _ "{" _ fields:(StructField)* _ "}" _ tailName:Identifier? _ arr:ArraySuffix? _ init:("=" _ Expression)? _ ";" {
       const hName = headName ? headName[1] : null;
-      // Handle anonymous structs gracefully
       const structName = hName || tailName || "AnonymousStruct";
-      const tsStructName = mapVariable(structName);
       
-      let result = pre + `interface ${tsStructName} {\n${fields.join("\n")}\n}`;
+      let result = pre + `interface ${structName} {\n${fields.join("\n")}\n}`;
       
-      // If a trailing variable was declared inline, instantiate it
       if (tailName) {
-          result += `\n${pre}let ${mapVariable(tailName)}: ${tsStructName};`;
+          const typeStr = structName + (arr ? "[]" : "");
+          const valStr = init ? ` = ${init[2]}` : "";
+          result += `\n${pre}let ${tailName}: ${typeStr}${valStr};`;
       }
       return result;
   }
 
 StructField
-  = pre:_ t:Type __ id:Identifier _ ";" { 
-      // Struct properties maintain their exact names without the 'compiled_' prefix
-      return pre + `  ${id}: ${mapType(t)};`; 
+  = pre:_ t:Type __ id:Identifier _ arr:ArraySuffix? _ ";" { 
+      return pre + `  ${id}: ${mapType(t)}${arr ? "[]" : ""};`; 
   }
 
-/* ===================================================== */
-/* Globals & Variables */
-/* ===================================================== */
-
+/* =====================================================
+   Globals & Variables
+   ===================================================== */
 GlobalVarDecl
-  = pre:_ qual:(StorageQualifier __)? t:Type __ id:Identifier _ init:("=" _ Expression)? _ ";" {
+  = pre:_ qual:(StorageQualifier __)? t:Type __ id:Identifier _ arr:ArraySuffix? _ init:("=" _ Expression)? _ ";" {
       const kw = (qual && qual[0] === "const") ? "const" : "let";
       const val = init ? ` = ${init[2]}` : "";
-      return pre + `${kw} ${mapVariable(id)}: ${mapType(t)}${val};`;
+      return pre + `${kw} ${id}: ${mapType(t)}${arr ? "[]" : ""}${val};`;
   }
 
 StorageQualifier
   = "uniform" / "attribute" / "varying" / "const"
 
 LocalVarDecl
-  = pre:_ t:Type __ id:Identifier _ init:("=" _ Expression)? _ ";" {
+  = pre:_ t:Type __ id:Identifier _ arr:ArraySuffix? _ init:("=" _ Expression)? _ ";" {
       const val = init ? ` = ${init[2]}` : "";
-      return pre + `let ${mapVariable(id)}: ${mapType(t)}${val};`;
+      return pre + `let ${id}: ${mapType(t)}${arr ? "[]" : ""}${val};`;
   }
 
-/* ===================================================== */
-/* Functions & Macros */
-/* ===================================================== */
+ArraySuffix
+  = "[" _ Expression? _ "]" { return "[]"; }
 
+/* =====================================================
+   Functions & Macros
+   ===================================================== */
 FunctionDecl
   = pre:_ ret:Type __ name:Identifier _ "(" _ params:ParamList? _ ")" _ body:Block {
-      return pre + `function ${mapVariable(name)}(${params ? params : ""}): ${mapType(ret)} ${body}`;
+      return pre + `function ${name}(${params ? params : ""}): ${mapType(ret)} ${body}`;
   }
 
 ParamList
@@ -164,7 +144,7 @@ ParamList
 
 Param
   = qual:(ParamQualifier __)? t:Type __ id:Identifier { 
-      return `${mapVariable(id)}: ${mapType(t)}`; 
+      return `${id}: ${mapType(t)}`; 
   }
 
 ParamQualifier
@@ -173,21 +153,20 @@ ParamQualifier
 MacroDecl
   = pre:_ "#" _ "define" __ name:Identifier _ "(" _ head:Identifier tail:(_ "," _ Identifier)* _ ")" _ body:$([^\r\n]*) {
       const params = [head, ...tail.map(t => t[3])].join(", ");
-      return pre + `function ${mapVariable(name)}(${params}) {\n    return ${body.trim()};\n}`;
+      return pre + `function ${name}(${params}) {\n    return ${body.trim()};\n}`;
   }
   / pre:_ "#" _ "define" __ name:Identifier __ body:$([^\r\n]*) {
-      return pre + `const ${mapVariable(name)} = ${body.trim()};`;
+      return pre + `const ${name} = ${body.trim()};`;
   }
 
-/* ===================================================== */
-/* Statements & Control Flow */
-/* ===================================================== */
-
+/* =====================================================
+   Statements & Control Flow
+   ===================================================== */
 Block
   = "{" _ stmts:(Statement)* _ "}" { return `{\n${stmts.join("\n")}\n}`; }
 
 Statement
-  = Block / IfStmt / ForStmt / WhileStmt / DoWhileStmt / BreakStmt / ContinueStmt / ReturnStmt / LocalVarDecl / ExprStmt / CommentStmt
+  = Block / StructDecl / IfStmt / ForStmt / WhileStmt / DoWhileStmt / SwitchStmt / BreakStmt / ContinueStmt / ReturnStmt / LocalVarDecl / ExprStmt / CommentStmt
 
 BreakStmt = pre:_ "break" _ ";" { return pre + "break;"; }
 ContinueStmt = pre:_ "continue" _ ";" { return pre + "continue;"; }
@@ -217,10 +196,24 @@ DoWhileStmt
       return pre + `do ${body} while (${cond});`; 
   }
 
-/* ===================================================== */
-/* Expressions */
-/* ===================================================== */
+SwitchStmt
+  = pre:_ "switch" _ "(" _ expr:Expression _ ")" _ "{" _ cases:(CaseClause _)* "}" {
+      return pre + `switch (${expr}) {\n` + cases.map(x => x[0]).join("\n") + `\n}`;
+  }
 
+CaseClause
+  = pre:_ "case" __ v:Expression _ ":" _ body:((Statement _)+)? {
+      const stmts = body ? body.map(x => x[0]).join("\n") : "";
+      return pre + `case ${v}:\n` + stmts;
+  }
+  / pre:_ "default" _ ":" _ body:((Statement _)+)? {
+      const stmts = body ? body.map(x => x[0]).join("\n") : "";
+      return pre + `default:\n` + stmts;
+  }
+
+/* =====================================================
+   Expressions
+   ===================================================== */
 Expression = AssignmentExpr
 
 AssignmentExpr
@@ -264,13 +257,27 @@ PostfixPart
   / _ op:("++"/"--") { return (b) => `${b}${op}`; }
 
 Primary
-  = Number 
+  = ArrayConstructor 
+  / TypeConstructor
+  / Number 
   / Boolean 
   / "(" _ e:Expression _ ")" { return `(${e})`; } 
   / FuncCall 
-  / id:Identifier { return mapVariable(id); }
+  / id:Identifier { return id; }
 
 Boolean = "true" / "false"
+
+// Captures array initializations like float[4](0.1, 0.5) or vec3[](...)
+ArrayConstructor
+  = type:Type _ "[" _ size:Expression? _ "]" _ "(" _ args:ArgList? _ ")" {
+      return `[${args ? args.join(", ") : ""}]`;
+  }
+
+// Captures standard matrix/vector constructors
+TypeConstructor
+  = name:("vec2"/"vec3"/"vec4"/"mat2"/"mat3"/"mat4") _ "(" _ args:ArgList? _ ")" {
+      return `new ${mapType(name)}(${args ? args.join(", ") : ""})`;
+  }
 
 FuncCall
   = name:Identifier _ "(" _ args:ArgList? _ ")" { return mapFuncCall(name, args); }
@@ -279,12 +286,11 @@ ArgList
   = head:Expression tail:(_ "," _ Expression)* { return [head, ...tail.map(t=>t[3])]; }
 
 Assignable
-  = base:Identifier tail:PostfixPart* { return tail.reduce((a, t) => t(a), mapVariable(base)); }
+  = base:Identifier tail:PostfixPart* { return tail.reduce((a, t) => t(a), base); }
 
-/* ===================================================== */
-/* Core Tokens & Types */
-/* ===================================================== */
-
+/* =====================================================
+   Core Tokens & Types
+   ===================================================== */
 Type
   = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / "void" / Identifier
 

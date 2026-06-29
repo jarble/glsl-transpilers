@@ -8,6 +8,9 @@
     vec2: "Vector2",
     vec3: "Vector3",
     vec4: "Vector4",
+    uvec2: "Vector2",
+    uvec3: "Vector3",
+    uvec4: "Vector4",
 
     mat2: "mat2",
     mat3: "mat3",
@@ -394,7 +397,7 @@ AssignmentExpr
 
 AssignOp
   =
-  "+=" / "-=" / "*=" / "/=" / "="
+  "+=" / "-=" / "*=" / "/=" / "%=" / "<<=" / ">>=" / "&=" / "^=" / "|=" / "="
 
 /* ===================================================== */
 /* EXPRESSIONS */
@@ -404,9 +407,9 @@ Expression = Ternary
 
 Ternary
   =
-  cond:LogicalOr _ "?" _ ifTrue:Expression _ ":" _ ifFalse:Expression
+  cond:LogicalOr ws1:_ "?" ws2:_ ifTrue:Expression ws3:_ ":" ws4:_ ifFalse:Expression
   {
-    return `${ifTrue} if ${cond} else ${ifFalse}`;
+    return `(${ifTrue} if ${cond} else ${ifFalse})`;
   }
   / LogicalOr
 
@@ -419,21 +422,52 @@ LogicalOr
 
 LogicalAnd
   =
-  l:Comparison tail:(_ "&&" _ Comparison)*
+  l:BitwiseOr tail:(_ "&&" _ BitwiseOr)*
   {
     return tail.reduce((a,t)=>a+" and "+t[3], l);
   }
 
-Comparison
+BitwiseOr
   =
-  l:AddSub tail:(_ CompOp _ AddSub)*
+  l:BitwiseXor tail:(_ "|" _ BitwiseXor)*
+  {
+    return tail.reduce((a,t)=>a+" | "+t[3], l);
+  }
+
+BitwiseXor
+  =
+  l:BitwiseAnd tail:(_ "^" _ BitwiseAnd)*
+  {
+    return tail.reduce((a,t)=>a+" ^ "+t[3], l);
+  }
+
+BitwiseAnd
+  =
+  l:Equality tail:(_ "&" _ Equality)*
+  {
+    return tail.reduce((a,t)=>a+" & "+t[3], l);
+  }
+
+Equality
+  =
+  l:Relational tail:(_ ("=="/"!=") _ Relational)*
   {
     return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
   }
 
-CompOp
+Relational
   =
-  "==" / "!=" / "<=" / ">=" / "<" / ">"
+  l:Shift tail:(_ ("<="/">="/"<"/">") _ Shift)*
+  {
+    return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
+  }
+
+Shift
+  =
+  l:AddSub tail:(_ ("<<"/">>") _ AddSub)*
+  {
+    return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l);
+  }
 
 AddSub
   =
@@ -463,6 +497,7 @@ Unary
   / "--" _ v:Unary { return v + " -= 1"; }
   / "!" _ v:Unary { return "not " + v; }
   / "-" _ v:Unary { return "-" + v; }
+  / "~" _ v:Unary { return "~" + v; }
   / Postfix
 
 Primary
@@ -496,7 +531,7 @@ ArrayConstructor
 
 TypeConstructor
   =
-  name:("vec2"/"vec3"/"vec4"/"mat2"/"mat3"/"mat4") _ "(" _ args:ArgList? _ ")"
+  name:("vec2"/"vec3"/"vec4"/"uvec2"/"uvec3"/"uvec4"/"mat2"/"mat3"/"mat4") _ "(" _ args:ArgList? _ ")"
   {
     return mapType(name) + "(" + (args ? args.join(", ") : "") + ")";
   }
@@ -557,6 +592,9 @@ BaseType
   / "vec2"
   / "vec3"
   / "vec4"
+  / "uvec2"
+  / "uvec3"
+  / "uvec4"
   / "mat2"
   / "mat3"
   / "mat4"
@@ -577,8 +615,9 @@ Number
       )
       ([eE] [+\-]? [0-9]+)?
   )
-  suffix:([fFuU])?
+  suffix:([fFuU]+)?
   {
+    // Strip trailing GLSL suffixes to natively evaluate as Python integers or floats
     return num;
   }
 
