@@ -109,8 +109,6 @@ StructDecl
 
       let result = `${pre}structure ${structName} where\n${memberList}`;
 
-      // If the GLSL code provided BOTH a struct name and a trailing instance variable,
-      // or just an anonymous struct with an instance, emit the variable declaration too.
       if (n2) {
           const varName = mapVariable(n2);
           result += `\ndef ${varName} : ${structName} := default`;
@@ -149,7 +147,6 @@ FunctionDecl
       
       let leanBody = body.returnExpr;
       if (body.locals.length > 0) {
-          // Bubbles up interior pre/post whitespace directly into the Let sequences
           const bindings = body.locals.map(l => `${l.pre}let ${l.id} := ${l.val};${l.post}`).join("\n  ");
           leanBody = `${bindings}\n  ${leanBody}`;
       }
@@ -198,12 +195,20 @@ Statement
   = LocalVarDecl
   / AssignmentStmt
   / IfStmt
+  / SwitchStmt
   / ReturnStmt
+  / BreakStmt
   / ExprStmt
 
 ExprStmt
   = pre:_ expr:Expression _ ";" post:_ {
       return { type: "Expr", val: expr, pre: pre, post: post };
+  }
+
+// Drops break keywords, trusting Lean's implicit match evaluation
+BreakStmt
+  = pre:_ "break" _ ";" post:_ {
+      return null; 
   }
 
 IfStmt
@@ -218,6 +223,53 @@ IfStmt
       };
   }
 
+// Compiles GLSL switch blocks into structured Lean `match` shadows
+SwitchStmt
+  = pre:_ "switch" _ "(" _ expr:Expression _ ")" _ "{" _ cases:(CaseClause _)* "}" post:_ {
+      let matchBody = cases.map(c => c[0].code).join("");
+      let target = cases.length > 0 ? cases[0][0].target : "compiled_switch";
+      
+      return [{ type: "LocalVar", id: target, val: `match ${expr} with${matchBody}`, pre: pre, post: post }];
+  }
+
+CaseClause
+  = pre:_ "case" __ v:Expression _ ":" _ body:((Statement _)*) {
+      let val = "default";
+      let target = "match_res";
+      if (body) {
+          body.forEach(b => {
+              let stmt = b[0];
+              if (!stmt) return;
+              if (Array.isArray(stmt) && stmt[0].type === "LocalVar") {
+                  target = stmt[0].id;
+                  val = stmt[0].val;
+              } else if (stmt.type === "Return") {
+                  val = stmt.expr;
+              }
+          });
+      }
+      const comment = pre.trim() ? ` ${pre.trim()}` : "";
+      return { code: `${comment}\n    | ${v} => ${val}`, target: target };
+  }
+  / pre:_ "default" _ ":" _ body:((Statement _)*) {
+      let val = "default";
+      let target = "match_res";
+      if (body) {
+          body.forEach(b => {
+              let stmt = b[0];
+              if (!stmt) return;
+              if (Array.isArray(stmt) && stmt[0].type === "LocalVar") {
+                  target = stmt[0].id;
+                  val = stmt[0].val;
+              } else if (stmt.type === "Return") {
+                  val = stmt.expr;
+              }
+          });
+      }
+      const comment = pre.trim() ? ` ${pre.trim()}` : "";
+      return { code: `${comment}\n    | _ => ${val}`, target: target };
+  }
+
 LocalVarDecl
   = pre:_ mods:(VarModifier)* type:Type __ head:VarInit tail:(_ "," _ VarInit)* _ ";" post:_ {
       const vars = [head, ...tail.map(t => t[3])];
@@ -225,7 +277,6 @@ LocalVarDecl
       return vars.map((v, i) => {
           const leanType = v.isArray ? `Array ${baseLeanType}` : baseLeanType;
           let defaultVal = getDefault(leanType);
-          // Attach pre to the first var, post to the last, empty string to others for formatting stability
           return { type: "LocalVar", id: mapVariable(v.id), val: v.val || defaultVal, pre: i === 0 ? pre : "", post: i === vars.length -1 ? post : "" };
       });
     }
@@ -254,7 +305,13 @@ ReturnStmt
 /* ---------------------------------------------------- */
 
 Expression
-  = BinaryExpr
+  = Ternary
+
+Ternary
+  = cond:BinaryExpr _ "?" _ trueExpr:Expression _ ":" _ falseExpr:Expression {
+      return `(if ${cond} then ${trueExpr} else ${falseExpr})`;
+    }
+  / BinaryExpr
 
 BinaryExpr
   = left:UnaryExpr tail:(_ ("&&" / "||" / "==" / "!=" / "<=" / ">=" / "<" / ">" / "+" / "-" / "*" / "/") _ UnaryExpr)* {
@@ -278,7 +335,6 @@ PostfixExpr
           if (element.type === "index") return `${result}[${element.val}]!`;
           if (element.type === "prop") {
               const p = element.val;
-              // Map GLSL vector properties to array indices
               if (p === "x" || p === "r") return `${result}[0]!`;
               if (p === "y" || p === "g") return `${result}[1]!`;
               if (p === "z" || p === "b") return `${result}[2]!`;
@@ -295,7 +351,6 @@ PrimaryExpr
   / Number
   / id:Identifier { return mapVariable(id); }
 
-// Parses float[3](...) or vec2[](...) into Lean Array literals
 ArrayConstructor
   = type:Type _ "[" _ Expression? _ "]" _ "(" _ args:ArgList? _ ")" {
       const argStr = args ? args.join(", ") : "";
