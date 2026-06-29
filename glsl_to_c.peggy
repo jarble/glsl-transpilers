@@ -59,7 +59,6 @@ Macro
 
 StructDecl
   = ws1:_ "struct" namePart:(ws2:__ id:IdentifierName { return ws2 + prefixId(id); })? ws3:_ "{" members:StructMember* ws4:_ "}" instPart:(ws5:_ inst:IdentifierName { return ws5 + prefixId(inst); })? ws6:_ ";" {
-      // Conditionally maps both named structs and anonymous instance declarations
       return ws1 + "struct" + (namePart || "") + ws3 + "{" + members.join("") + ws4 + "}" + (instPart || "") + ws6 + ";";
   }
 
@@ -106,9 +105,12 @@ Block
 Statement
   = Block
   / IfStmt
+  / SwitchStmt
   / ForStmt
   / WhileStmt
   / ReturnStmt
+  / BreakStmt
+  / ContinueStmt
   / DeclStmt
   / ExprStmt
   / Macro
@@ -118,6 +120,20 @@ IfStmt
   = ws1:_ "if" ws2:_ "(" cond:Expression ws3:_ ")" trueBody:Statement falseBody:(ws4:_ "else" falseStmt:Statement { return ws4 + "else" + falseStmt; })? {
       return ws1 + "if" + ws2 + "(" + cond + ws3 + ")" + trueBody + (falseBody || "");
   }
+
+SwitchStmt
+  = ws1:_ "switch" ws2:_ "(" cond:Expression ws3:_ ")" ws4:_ "{" cases:CaseClause* ws5:_ "}" {
+      return ws1 + "switch" + ws2 + "(" + cond + ws3 + ")" + ws4 + "{" + cases.join("") + ws5 + "}";
+  }
+
+CaseClause
+  = label:CaseLabel stmts:Statement* {
+      return label + stmts.join("");
+  }
+
+CaseLabel
+  = ws1:_ "case" ws2:__ expr:Expression ws3:_ ":" { return ws1 + "case" + ws2 + expr + ws3 + ":"; }
+  / ws1:_ "default" ws2:_ ":" { return ws1 + "default" + ws2 + ":"; }
 
 ForStmt
   = ws1:_ "for" ws2:_ "(" init:ForInit cond:ForCond update:ForUpdate ws3:_ ")" body:Statement {
@@ -136,6 +152,16 @@ WhileStmt
 ReturnStmt
   = ws1:_ "return" expr:(ws2:__ e:Expression { return ws2 + e; })? ws3:_ ";" {
       return ws1 + "return" + (expr || "") + ws3 + ";";
+  }
+
+BreakStmt
+  = ws1:_ "break" ws2:_ ";" {
+      return ws1 + "break" + ws2 + ";";
+  }
+
+ContinueStmt
+  = ws1:_ "continue" ws2:_ ";" {
+      return ws1 + "continue" + ws2 + ";";
   }
 
 DeclStmt
@@ -202,12 +228,14 @@ ArrayConstructor
   = ws1:_ id:IdentifierName ws2:_ "[" ws3:_ size:Expression? ws4:_ "]" ws5:_ "(" args:ArgList? ws6:_ ")" {
       let arrType = mapType(id) + "[" + (size ? size : "") + "]";
       let argStr = args ? args : "";
+      // Converts GLSL arrays to C99 compound literals
       return ws1 + "(" + arrType + ")" + ws2 + "{" + argStr + ws6 + "}";
   }
 
 TypeConstructor
   = ws1:_ type:BuiltinType ws2:_ "(" args:ArgList? ws3:_ ")" {
       let argStr = args ? args : "";
+      // Converts GLSL objects to C99 compound literals
       return ws1 + "(" + type + ")" + ws2 + "{" + argStr + ws3 + "}";
   }
 
