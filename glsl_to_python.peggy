@@ -360,13 +360,13 @@ SwitchStmt
 
 CaseClause
   =
-  "case" ws1:__ v:Expression ws2:_ ":" ws3:_ body:(Statement)*
+  "case" ws1:__ v:Expression ws2:_ ":" ws3:_ body:(Statement)* ("break" _ ";")?
   {
     const b = body.length > 0 ? ws3 + body.join("\n") : ws3 + "pass";
     return ws1 + ws2 + `case ${v}:\n${indent(b)}`;
   }
   /
-  "default" ws1:_ ":" ws2:_ body:(Statement)*
+  "default" ws1:_ ":" ws2:_ body:(Statement)* ("break" _ ";")?
   {
     const b = body.length > 0 ? ws2 + body.join("\n") : ws2 + "pass";
     return ws1 + `case _:\n${indent(b)}`;
@@ -617,7 +617,6 @@ Number
   )
   suffix:([fFuU]+)?
   {
-    // Strip trailing GLSL suffixes to natively evaluate as Python integers or floats
     return num;
   }
 
