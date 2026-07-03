@@ -17,37 +17,24 @@
     "mat4": "mat R 4 4"
   };
 
+  // Standard GLSL keywords and types that should never be prefixed
+  const reservedKeywords = new Set([
+    "int", "float", "bool", "void", "vec2", "vec3", "vec4", 
+    "ivec2", "ivec3", "ivec4", "bvec2", "bvec3", "bvec4",
+    "mat2", "mat3", "mat4", "if", "else", "return", "struct", 
+    "for", "while", "do", "true", "false"
+  ]);
+
   // Maps GLSL math to Coq's standard Reals library
   const builtinFuncMap = {
-    "abs": "Rabs",
-    "acos": "acos",
-    "asin": "asin",
-    "atan": "atan",
-    "cos": "cos",
-    "sin": "sin",
-    "tan": "tan",
-    "exp": "exp",
-    "log": "ln",
-    "log2": "Rlog2",
-    "pow": "Rpower",
-    "sqrt": "sqrt",
-    "min": "Rmin",
-    "max": "Rmax",
-    "floor": "Zfloor",
-    "ceil": "Zceil",
-    "fract": "Rfract",
-    "mod": "Rmod",
-    "mix": "Rmix",
-    "clamp": "Rclamp",
-    "sign": "Rsign",
-    "step": "Rstep",
-    "smoothstep": "Rsmoothstep",
-    "length": "vlength",
-    "distance": "vdistance",
-    "dot": "vdot",
-    "cross": "vcross",
-    "normalize": "vnormalize",
-    "reflect": "vreflect",
+    "abs": "Rabs", "acos": "acos", "asin": "asin", "atan": "atan",
+    "cos": "cos", "sin": "sin", "tan": "tan", "exp": "exp",
+    "log": "ln", "log2": "Rlog2", "pow": "Rpower", "sqrt": "sqrt",
+    "min": "Rmin", "max": "Rmax", "floor": "Zfloor", "ceil": "Zceil",
+    "fract": "Rfract", "mod": "Rmod", "mix": "Rmix", "clamp": "Rclamp",
+    "sign": "Rsign", "step": "Rstep", "smoothstep": "Rsmoothstep",
+    "length": "vlength", "distance": "vdistance", "dot": "vdot",
+    "cross": "vcross", "normalize": "vnormalize", "reflect": "vreflect",
     "refract": "vrefract"
   };
 
@@ -60,50 +47,60 @@
     "gl_PointCoord": "gl_PointCoord"
   };
 
+  function mapIdentifier(id) {
+    // 1. Check if it's a known GLSL constant/environment variable
+    if (builtinConstMap[id]) return builtinConstMap[id];
+    // 2. Check if it's a known GLSL built-in function
+    if (builtinFuncMap[id]) return id;
+    // 3. Check if it's a reserved GLSL keyword or type
+    if (reservedKeywords.has(id)) return id;
+    
+    // 4. If it's none of the above, it's user-defined. Prefix it.
+    return "compiled_" + id;
+  }
+
   function mapType(glslType){
     if(!glslType) return "R";
     if(glslType.endsWith("[]")){
       const base = mapType(glslType.slice(0,-2));
       return "list " + base;
     }
-    return typeMap[glslType] || glslType;
+    return typeMap[glslType] || mapIdentifier(glslType); // Ensure custom structs get prefixed
   }
 
   function formatNumber(n){
     let s = String(n).replace(/[fFuU]$/, "");
-    
     if (s.toLowerCase().includes("e")) {
       let val = Number(s);
       let out = val.toString();
-      
       if (!out.toLowerCase().includes("e")) {
         return out.includes(".") ? out : out + ".0";
       }
-      
       let parts = s.toLowerCase().split("e");
       let base = parts[0];
       let exp = parts[1];
       if (!base.includes(".")) base += ".0";
       return "(" + base + " * 10^" + exp + ")";
     }
-
     if (s.startsWith(".")) s = "0" + s;
     if (s.endsWith(".")) s = s + "0";
     if (s.indexOf(".") === -1) s = s + ".0";
-    
     return s;
   }
 
-  function translateBuiltin(callee, args){
-    if(typeof callee !== "string") callee = String(callee);
+  function translateBuiltin(calleeRaw, args){
+    let callee = String(calleeRaw);
+    
+    // Un-prefix temporarily to check if it's a built-in function that got caught
+    let uncompiled = callee.replace(/^compiled_/, "");
     
     // Translate GLSL vector/matrix constructors to Coq list literals
-    if(callee.match(/^[ib]?vec[234]$/) || callee.match(/^mat[234]$/)) {
+    if(uncompiled.match(/^[ib]?vec[234]$/) || uncompiled.match(/^mat[234]$/)) {
       return "[" + (args ? args.join("; ") : "") + "]";
     }
 
-    // Map to Coq standard library function, or keep original name
-    const coqFunc = builtinFuncMap[callee] || callee;
+    // Map to Coq standard library function, or keep original (prefixed) name
+    const coqFunc = builtinFuncMap[uncompiled] || callee;
 
     // Wrap in parentheses to strictly define Coq application precedence
     return "(" + coqFunc + (args && args.length ? " " + args.join(" ") : "") + ")";
@@ -275,7 +272,7 @@ Postfix
 PostfixPart
   = "(" _ args:ArgList? _ ")" { return function(callee){ return translateBuiltin(callee,args||[]); } }
   / "[" _ idx:Expression _ "]" { return function(a){ return "(nth " + idx + " " + a + ")"; }; }
-  / "." name:Identifier { return function(o){ return "(" + name + " " + o + ")"; }; }
+  / "." name:Identifier { return function(o){ return "(" + name + " " + o + ")"; }; } // Prefixes struct properties correctly
 
 ArgList = head:Expression tail:(_ "," _ Expression)* { return [head].concat(tail.map(t=>t[3])).filter(m=>m); }
 
@@ -298,8 +295,8 @@ Assignable = Postfix
 Number = n:$(( [0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+ ) ([eE] [+-]? [0-9]+)? [fFuU]?) { return formatNumber(text()); }
 Boolean = b:("true" / "false") { return b; }
 
-// Checks if the identifier is a GLSL builtin constant, maps it if found, otherwise returns it raw.
-Identifier = id:$([a-zA-Z_$][a-zA-Z0-9_$]*) { return builtinConstMap[id] || id; }
+// Uses the new mapIdentifier function to append "compiled_" where necessary
+Identifier = id:$([a-zA-Z_$][a-zA-Z0-9_$]*) { return mapIdentifier(id); }
 
 /* ---------------- Types ---------------- */
 Type = base:BaseType arr:("[]")* { return base + arr.join(""); }
