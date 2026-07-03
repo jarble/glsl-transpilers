@@ -159,6 +159,8 @@ Statement
   VarDecl
   / AssignmentStmt
   / ReturnStmt
+  / BreakStmt
+  / ContinueStmt
   / IfStmt
   / ForStmt
   / WhileStmt
@@ -352,7 +354,7 @@ CaseClause
   { return "| _" + ws1 + " -> begin\n" + items.join(";\n") + "\nend"; }
 
 /* ===================================================== */
-/* return & assignments */
+/* return, break, continue & assignments */
 /* ===================================================== */
 
 ReturnStmt
@@ -361,6 +363,16 @@ ReturnStmt
   { return (expr||"()") + ws2; }
   /
   "return" ws1:_ ";"
+  { return "()" + ws1; }
+
+BreakStmt
+  =
+  "break" ws1:_ ";"
+  { return "()" + ws1; }
+
+ContinueStmt
+  =
+  "continue" ws1:_ ";"
   { return "()" + ws1; }
 
 AssignmentStmt
