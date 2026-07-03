@@ -312,4 +312,85 @@ FunctionCall
           if (name === "abs" && args.length === 1) return `${comments}(abs ${args[0]})`;
           if (name === "sign" && args.length === 1) return `${comments}(ite (> ${args[0]} 0.0) 1.0 (ite (< ${args[0]} 0.0) -1.0 0.0))`;
           if (name === "min" && args.length === 2) return `${comments}(ite (< ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
-          if (name === "max" && args.length === 2) return `${comments}(ite (> ${args[0]} ${args
+          if (name === "max" && args.length === 2) return `${comments}(ite (> ${args[0]} ${args[1]}) ${args[0]} ${args[1]})`;
+          if (name === "clamp" && args.length === 3) return `${comments}(ite (< ${args[0]} ${args[1]}) ${args[1]} (ite (> ${args[0]} ${args[2]}) ${args[2]} ${args[0]}))`;
+          if (name === "floor" && args.length === 1) return `${comments}(to_real (to_int ${args[0]}))`;
+          if (name === "ceil" && args.length === 1) return `${comments}(- (to_real (to_int (- ${args[0]}))))`;
+          if (name === "trunc" && args.length === 1) return `${comments}(ite (< ${args[0]} 0.0) (- (to_real (to_int (- ${args[0]})))) (to_real (to_int ${args[0]})))`;
+          if (name === "fract" && args.length === 1) return `${comments}(- ${args[0]} (to_real (to_int ${args[0]})))`;
+          if (name === "mod" && args.length === 2) return `${comments}(- ${args[0]} (* ${args[1]} (to_real (to_int (/ ${args[0]} ${args[1]})))))`;
+          if (name === "mix" && args.length === 3) return `${comments}(+ (* ${args[0]} (- 1.0 ${args[2]})) (* ${args[1]} ${args[2]}))`;
+          if (name === "step" && args.length === 2) return `${comments}(ite (< ${args[1]} ${args[0]}) 0.0 1.0)`;
+          if (name === "smoothstep" && args.length === 3) {
+              const tRaw = `(/ (- ${args[2]} ${args[0]}) (- ${args[1]} ${args[0]}))`;
+              const t = `(ite (< ${tRaw} 0.0) 0.0 (ite (> ${tRaw} 1.0) 1.0 ${tRaw}))`;
+              return `${comments}(* (* ${t} ${t}) (- 3.0 (* 2.0 ${t})))`;
+          }
+          if (name === "fma" && args.length === 3) return `${comments}(+ (* ${args[0]} ${args[1]}) ${args[2]})`;
+      }
+      
+      return `${comments}(${smtName} ${argStr})`;
+    }
+
+ArgList
+  = head:Expression tail:(ws1:_ "," ws2:_ Expression)* {
+      return [head].concat(tail.map(t => t[0] + t[2] + t[3]));
+    }
+
+/* ---------------------------------------------------- */
+/* Lexical Tokens & Comment Capturing                   */
+/* ---------------------------------------------------- */
+
+Type
+  = "void" { return "()"; }
+  / "float" { return "Real"; }
+  / "int" { return "Int"; }
+  / "bool" { return "Bool"; }
+  / "vec2" { return "(Array Int Real)"; }
+  / "vec3" { return "(Array Int Real)"; }
+  / "vec4" { return "(Array Int Real)"; }
+  / "ivec2" { return "(Array Int Int)"; }
+  / "ivec3" { return "(Array Int Int)"; }
+  / "ivec4" { return "(Array Int Int)"; }
+  / "bvec2" { return "(Array Int Bool)"; }
+  / "bvec3" { return "(Array Int Bool)"; }
+  / "bvec4" { return "(Array Int Bool)"; }
+  / "mat2" { return "(Array Int (Array Int Real))"; }
+  / "mat3" { return "(Array Int (Array Int Real))"; }
+  / "mat4" { return "(Array Int (Array Int Real))"; }
+  / id:Identifier { return "compiled_" + id; }
+
+VarModifier
+  = ("const" / "inout" / "in" / "out" / "uniform" / "varying" / "attribute") __
+
+Identifier
+  = $([a-zA-Z_][a-zA-Z0-9_]*)
+
+Number
+  = $([0-9]+ "." [0-9]+ / "." [0-9]+ / [0-9]+ "." / [0-9]+)
+
+_ "optional whitespace"
+  = tokens:(WhiteSpace / MultiLineComment / SingleLineComment)* {
+      const comments = tokens.filter(t => typeof t === "string" && t.startsWith(";"));
+      return comments.length > 0 ? comments.join("\n") + "\n" : "";
+  }
+
+__ "mandatory whitespace"
+  = tokens:(WhiteSpace / MultiLineComment / SingleLineComment)+ {
+      const comments = tokens.filter(t => typeof t === "string" && t.startsWith(";"));
+      return comments.length > 0 ? comments.join("\n") + "\n" : "";
+  }
+
+WhiteSpace
+  = [ \t\n\r] { return null; }
+
+SingleLineComment
+  = "//" text:(![\n\r] .)* { 
+      return ";" + text.map(t => t[1]).join(""); 
+    }
+
+MultiLineComment
+  = "/*" text:(!"*/" .)* "*/" { 
+      const content = text.map(t => t[1]).join("");
+      return content.split("\n").map(line => ";" + line).join("\n");
+    }
