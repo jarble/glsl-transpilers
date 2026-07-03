@@ -1,831 +1,387 @@
 {
   const typeMap = {
-    float: "Float",
-    int: "Int",
-    uint: "UInt",
-    bool: "Bool",
+    float: "float",
+    int: "int",
+    uint: "uint",
+    bool: "bool",
 
-    vec2: "Vector2",
-    vec3: "Vector3",
-    vec4: "Vector4",
+    vec2: "float2",
+    vec3: "float3",
+    vec4: "float4",
+    uvec2: "uint2",
+    uvec3: "uint3",
+    uvec4: "uint4",
+    ivec2: "int2",
+    ivec3: "int3",
+    ivec4: "int4",
+    bvec2: "bool2",
+    bvec3: "bool3",
+    bvec4: "bool4",
 
-    uvec2: "UVector2",
-    uvec3: "UVector3",
-    uvec4: "UVector4",
+    mat2: "float2x2",
+    mat3: "float3x3",
+    mat4: "float4x4",
 
-    mat2: "Matrix2",
-    mat3: "Matrix3",
-    mat4: "Matrix4",
-
-    void: "Void"
+    void: "void"
   };
 
-  function mapType(t){
-    return typeMap[t] || t;
+  const glslBuiltins = new Set([
+    "sin", "cos", "tan", "asin", "acos", "atan", "pow", "exp", "log", 
+    "exp2", "log2", "sqrt", "inversesqrt", "abs", "sign", "floor", "ceil", 
+    "fract", "mod", "min", "max", "clamp", "mix", "step", "smoothstep", 
+    "length", "distance", "dot", "cross", "normalize", "reflect", "refract"
+  ]);
+
+  function mapType(t) {
+    return typeMap[t] || mapIdentifier(t);
   }
 
-  // Intercepts built-in GLSL variables and constants
-  function mapVariable(name) {
-    const builtinVars = {
-      "gl_Position": "gl_Position",
-      "gl_FragColor": "gl_FragColor",
-      "gl_FragCoord": "gl_FragCoord",
-      "gl_FrontFacing": "gl_FrontFacing",
-      "gl_PointSize": "gl_PointSize",
-      "gl_VertexID": "gl_VertexID",
-      "gl_InstanceID": "gl_InstanceID"
-    };
-    return builtinVars[name] || name;
+  function mapIdentifier(id) {
+    if (glslBuiltins.has(id)) return id;
+    if (id === "main" || id.startsWith("gl_") || id.startsWith("SV_") || typeMap[id]) return id;
+    
+    return "compiled_" + id;
   }
 
-  // Intercepts the function name and its arguments to generate raw Haxe Math expressions
-  function mapFuncCall(name, args) {
-    args = args || [];
-    const a = args[0] || "";
-    const b = args[1] || "";
-    const c = args[2] || "";
-
-    switch(name) {
-      // Trigonometry
-      case "radians": return `(${a} * (Math.PI / 180.0))`;
-      case "degrees": return `(${a} * (180.0 / Math.PI))`;
-      case "sin": return `Math.sin(${a})`;
-      case "cos": return `Math.cos(${a})`;
-      case "tan": return `Math.tan(${a})`;
-      case "asin": return `Math.asin(${a})`;
-      case "acos": return `Math.acos(${a})`;
-      case "atan": return args.length === 2 ? `Math.atan2(${a}, ${b})` : `Math.atan(${a})`;
-
-      // Exponential
-      case "pow": return `Math.pow(${a}, ${b})`;
-      case "exp": return `Math.exp(${a})`;
-      case "log": return `Math.log(${a})`;
-      case "exp2": return `Math.pow(2.0, ${a})`;
-      case "log2": return `(Math.log(${a}) / Math.log(2.0))`;
-      case "sqrt": return `Math.sqrt(${a})`;
-      case "inversesqrt": return `(1.0 / Math.sqrt(${a}))`;
-
-      // Common Math
-      case "abs": return `Math.abs(${a})`;
-      case "sign": return `(${a} > 0.0 ? 1.0 : (${a} < 0.0 ? -1.0 : 0.0))`;
-      case "floor": return `Math.floor(${a})`;
-      case "ceil": return `Math.ceil(${a})`;
-      case "fract": return `(${a} - Math.floor(${a}))`;
-      case "mod": return `(${a} % ${b})`;
-      case "min": return `Math.min(${a}, ${b})`;
-      case "max": return `Math.max(${a}, ${b})`;
-      case "clamp": return `Math.max(${b}, Math.min(${c}, ${a}))`;
-      case "mix": return `(${a} * (1.0 - ${c}) + ${b} * ${c})`;
-      case "step": return `(${b} < ${a} ? 0.0 : 1.0)`;
-      case "smoothstep": 
-        const t = `Math.max(0.0, Math.min(1.0, (${c} - ${a}) / (${b} - ${a})))`;
-        return `(${t} * ${t} * (3.0 - 2.0 * ${t}))`;
-
-      // Geometric
-      case "length": return `${a}.length()`;
-      case "distance": return `Vector3.distance(${a}, ${b})`;
-      case "dot": return `Vector3.dot(${a}, ${b})`;
-      case "cross": return `Vector3.cross(${a}, ${b})`;
-      case "normalize": return `Vector3.normalize(${a})`;
-      case "reflect": return `Vector3.reflect(${a}, ${b})`;
-
-      // Unmapped functions pass through naturally
-      default: return `${name}(${args.join(", ")})`;
-    }
-  }
-
-  function emitComment(c){
-    return c + "\n";
-  }
-
-  // Generates Haxe Classes for GLSL Matrices
-  function getBuiltInStructs() {
-    return `
-class Matrix2 {
-    public var col0:Vector2;
-    public var col1:Vector2;
-    public function new(c0:Vector2, c1:Vector2) { this.col0 = c0; this.col1 = c1; }
-}
-
-class Matrix3 {
-    public var col0:Vector3;
-    public var col1:Vector3;
-    public var col2:Vector3;
-    public function new(c0:Vector3, c1:Vector3, c2:Vector3) { this.col0 = c0; this.col1 = c1; this.col2 = c2; }
-}
-
-class Matrix4 {
-    public var col0:Vector4;
-    public var col1:Vector4;
-    public var col2:Vector4;
-    public var col3:Vector4;
-    public function new(c0:Vector4, c1:Vector4, c2:Vector4, c3:Vector4) { this.col0 = c0; this.col1 = c1; this.col2 = c2; this.col3 = c3; }
-}
-`;
+  function mapFuncName(name) {
+    // Translate specific GLSL built-ins to Slang equivalents
+    if (name === "mix") return "lerp";
+    if (name === "fract") return "frac";
+    if (name === "mod") return "fmod";
+    if (name === "inversesqrt") return "rsqrt";
+    
+    if (glslBuiltins.has(name)) return name;
+    return mapIdentifier(name);
   }
 }
 
 /* ===================================================== */
-/* entry */
+/* Entry */
 /* ===================================================== */
 
 Start
-  =
-  _
-  items:(TopLevel (_ TopLevel)*)?
-  _
+  = ws:_ items:(TopLevel*)
   {
-    const program = items
-    ? [items[0]].concat(items[1].map(x=>x[1])).join("\n")
-    : "";
-    
-    return program + "\n\n/* --- GLSL Built-in Matrix Types --- */\n" + getBuiltInStructs();
+    return ws + items.join("");
   }
 
-/* ===================================================== */
-/* top level */
-/* ===================================================== */
-
 TopLevel
-  =
-  CommentStmt
-  /
-  StructDecl
-  /
-  GlobalDecl
-  /
-  FunctionDecl
-  /
-  Statement
+  = PreprocessorDirective
+  / StructDecl
+  / VarDecl
+  / FunctionDecl
+  / Statement
 
 Statement
-  =
-  CommentStmt
-  /
-  VarDecl
-  /
-  AssignmentStmt
-  /
-  ReturnStmt
-  /
-  IfStmt
-  /
-  ForStmt
-  /
-  WhileStmt
-  /
-  DoWhileStmt
-  /
-  SwitchStmt
-  /
-  ExprStmt
-  /
-  Block
+  = PreprocessorDirective
+  / VarDecl
+  / AssignmentStmt
+  / ReturnStmt
+  / BreakStmt
+  / ContinueStmt
+  / IfStmt
+  / ForStmt
+  / WhileStmt
+  / DoWhileStmt
+  / SwitchStmt
+  / ExprStmt
+  / Block
 
 /* ===================================================== */
-/* comments */
+/* Preprocessor */
 /* ===================================================== */
 
-CommentStmt
-  =
-  c:Comment
-  { return emitComment(c); }
-
-Comment
-  =
-  SingleLineComment
-  /
-  MultiLineComment
-
-SingleLineComment
-  =
-  $("//" [^\r\n]*)
-
-MultiLineComment
-  =
-  $("/*" (!"*/" .)* "*/")
+PreprocessorDirective
+  = directive:$([ \t]* "#" ( "\\" . / [^\r\n] )*) ws:_
+  { return directive + ws; }
 
 /* ===================================================== */
-/* structs */
+/* Structs */
 /* ===================================================== */
 
 StructDecl
-  =
-  "struct"
-  headName:(__ Identifier)?
-  _
-  "{"
-  _
-  fields:(StructField (_ StructField)*)?
-  _
-  "}"
-  _
-  tailName:(Identifier)?
-  _
-  ";"?
+  = "struct" ws1:__? headName:Identifier? ws2:_ "{" ws3:_ fields:(StructField*) "}" ws4:_ tailName:Identifier? ws5:_ ";" ws6:_
   {
-    const n1 = headName ? headName[1] : null;
-    const n2 = tailName;
-    
-    const structName = n1 || n2 || "AnonymousStruct";
+    let structName = "AnonymousStruct";
 
-    const fs = fields
-      ? [fields[0]].concat(fields[1].map(x=>x[1]))
-      : [];
-
-    let result = `class ${structName} {\n${fs.join("\n")}\n    public function new() {}\n}`;
-
-    if (n1 && n2) {
-      result += `\nvar ${n2}:${structName};`;
+    if (headName) {
+      structName = mapIdentifier(headName);
+    } else if (tailName) {
+      structName = mapIdentifier(tailName) + "_Type"; 
     }
 
-    return result;
+    let out = `struct ${structName}` + (ws1 || " ") + `{` + ws3 + fields.join("") + `}`;
+    
+    if (tailName) {
+      out += `;\n${structName} ${mapIdentifier(tailName)}`;
+    }
+    
+    return out + ";" + ws6;
   }
 
 StructField
-  =
-  t:Type
-  __
-  id:Identifier
-  _
-  ";"
+  = t:Type ws1:__ id:Identifier arr:ArraySuffix? ws2:_ ";" ws3:_
   {
-    return `    public var ${id}:${mapType(t)};`;
+    return mapType(t) + ws1 + id + (arr || "") + ws2 + ";" + ws3;
   }
 
 /* ===================================================== */
-/* globals */
+/* Variables & Declarators */
 /* ===================================================== */
-
-GlobalDecl
-  =
-  qual:StorageQualifier?
-  _
-  t:Type
-  __
-  id:Identifier
-  arr:ArraySuffix?
-  _
-  init:("=" _ e:Expression { return e; })?
-  _
-  ";"
-  {
-    const ty = arr ? "Array<" + mapType(t) + ">" : mapType(t);
-    return "var " + id + ":" + ty + (init ? " = " + init : "") + ";";
-  }
 
 StorageQualifier
-  =
-  "uniform"
-  / "attribute"
-  / "varying"
-  / "const"
-
-/* ===================================================== */
-/* variables */
-/* ===================================================== */
+  = "uniform" / "attribute" / "varying" / "const"
 
 Declarator
-  =
-  id:Identifier
-  arr:ArraySuffix?
-  _
-  init:(
-    "="
-    _
-    e:Expression
-    { return e; }
-  )?
+  = id:Identifier arr:ArraySuffix? ws1:_ init:("=" ws2:_ Expression)?
   {
-    return {
-      id,
-      arr,
-      init
-    };
+    const initStr = init ? init[0] + init[1] + init[2] : "";
+    return mapIdentifier(id) + (arr || "") + ws1 + initStr;
   }
 
 VarDecl
-  =
-  t:Type
-  __
-  head:Declarator
-  tail:(_ "," _ Declarator)*
-  _
-  ";"
+  = qual:(StorageQualifier __)? t:Type ws1:__ head:Declarator tail:(ws2:_ "," ws3:_ Declarator)* ws4:_ ";" ws5:_
   {
-    const decls =
-      [head].concat(
-        tail.map(x => x[3])
-      );
-
-    const ty = mapType(t);
-
-    return decls.map(d => {
-      const dtype = d.arr ? "Array<" + ty + ">" : ty;
-      return "var " + d.id + ":" + dtype + (d.init ? " = " + d.init : "") + ";";
-    }).join("\n");
+    const prefix = qual ? qual[0] + qual[1] : "";
+    let out = prefix + mapType(t) + ws1 + head;
+    for (let t of tail) { out += t[0] + "," + t[2] + t[3]; }
+    return out + ws4 + ";" + ws5;
   }
 
 /* ===================================================== */
-/* functions */
+/* Functions */
 /* ===================================================== */
 
 FunctionDecl
-  =
-  ret:Type
-  __
-  name:Identifier
-  _
-  "("
-  _
-  params:ParamList?
-  _
-  ")"
-  _
-  body:Block
+  = ret:Type ws1:__ name:Identifier ws2:_ "(" ws3:_ params:ParamList? ws4:_ ")" ws5:_ body:Block ws6:_
   {
-    return `function ${name}(${params ? params.join(", ") : ""}):${mapType(ret)}\n${body}`;
+    return mapType(ret) + ws1 + mapIdentifier(name) + ws2 + "(" + ws3 + (params || "") + ws4 + ")" + ws5 + body + ws6;
   }
 
 ParamList
-  =
-  head:Param
-  tail:(_ "," _ Param)*
+  = head:Param tail:(ws1:_ "," ws2:_ Param)*
   {
-    return [head].concat(tail.map(x=>x[3]));
+    return head + tail.map(t => t[0] + "," + t[2] + t[3]).join("");
   }
 
 Param
-  =
-  qual:(ParameterQualifier __)?
-  t:Type
-  __
-  id:Identifier
-  arr:ArraySuffix?
+  = qual:(ParameterQualifier __)? t:Type ws1:__ id:Identifier arr:ArraySuffix?
   {
-    const ty = arr ? "Array<" + mapType(t) + ">" : mapType(t);
-    return `${id}:${ty}`;
+    const prefix = qual ? qual[0] + qual[1] : "";
+    return prefix + mapType(t) + ws1 + mapIdentifier(id) + (arr || "");
   }
 
 ParameterQualifier
-  =
-  "inout"
-  / "in"
-  / "out"
+  = "inout" / "in" / "out"
 
 /* ===================================================== */
-/* blocks */
+/* Blocks & Control Flow */
 /* ===================================================== */
 
 Block
-  =
-  "{"
-  _
-  stmts:(Statement (_ Statement)*)?
-  _
-  "}"
+  = "{" ws1:_ stmts:(Statement*) "}"
   {
-    const s = stmts
-    ? [stmts[0]].concat(stmts[1].map(x=>x[1]))
-    : [];
-
-    return "{\n" + s.join("\n") + "\n}";
+    return "{" + ws1 + stmts.join("") + "}";
   }
 
-/* ===================================================== */
-/* control flow */
-/* ===================================================== */
-
 IfStmt
-  =
-  "if"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  thenStmt:Statement
-  elsePart:(_ "else" _ elseStmt:Statement { return elseStmt; })?
+  = "if" ws1:_ "(" ws2:_ cond:Expression ws3:_ ")" ws4:_ thenStmt:Statement elsePart:(ws5:_ "else" ws6:_ elseStmt:Statement { return ws5 + "else" + ws6 + elseStmt; })?
   {
-    return "if(" + cond + ") " +
-           thenStmt +
-           (elsePart ? " else " + elsePart : "");
+    return "if" + ws1 + "(" + ws2 + cond + ws3 + ")" + ws4 + thenStmt + (elsePart || "");
   }
 
 WhileStmt
-  =
-  "while"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  body:Statement
+  = "while" ws1:_ "(" ws2:_ cond:Expression ws3:_ ")" ws4:_ body:Statement
   {
-    return `while(${cond}) ${body}`;
+    return "while" + ws1 + "(" + ws2 + cond + ws3 + ")" + ws4 + body;
   }
 
 DoWhileStmt
-  =
-  "do"
-  _
-  body:Statement
-  _
-  "while"
-  _
-  "("
-  _
-  cond:Expression
-  _
-  ")"
-  _
-  ";"
+  = "do" ws1:_ body:Statement ws2:_ "while" ws3:_ "(" ws4:_ cond:Expression ws5:_ ")" ws6:_ ";" ws7:_
   {
-    return `do ${body} while(${cond});`;
+    return "do" + ws1 + body + ws2 + "while" + ws3 + "(" + ws4 + cond + ws5 + ")" + ws6 + ";" + ws7;
   }
 
 ForStmt
-  =
-  "for"
-  _
-  "("
-  _
-  init:ForInit?
-  _
-  ";"
-  _
-  cond:Expression?
-  _
-  ";"
-  _
-  update:ForUpdate?
-  _
-  ")"
-  _
-  body:Statement
+  = "for" ws1:_ "(" ws2:_ init:ForInit? ws3:_ ";" ws4:_ cond:Expression? ws5:_ ";" ws6:_ update:ForUpdate? ws7:_ ")" ws8:_ body:Statement
   {
-    return "for(" + (init||"") + "; " + (cond||"") + "; " + (update||"") + ") " + body;
+    return "for" + ws1 + "(" + ws2 + (init||"") + ws3 + ";" + ws4 + (cond||"") + ws5 + ";" + ws6 + (update||"") + ws7 + ")" + ws8 + body;
   }
 
-ForInit
-  =
-  VarDeclInline
-  /
-  AssignmentExpr
-  /
-  Expression
-
-ForUpdate
-  =
-  AssignmentExpr
-  /
-  Postfix
-  /
-  Expression
+ForInit = VarDeclInline / AssignmentExpr / Expression
+ForUpdate = AssignmentExpr / Expression
 
 VarDeclInline
-  =
-  t:Type
-  __
-  head:Declarator
-  tail:(_ "," _ Declarator)*
+  = t:Type ws1:__ head:Declarator tail:(ws2:_ "," ws3:_ Declarator)*
   {
-    const decls = [head].concat(tail.map(x => x[3]));
-    const ty = mapType(t);
-
-    return decls.map(d => {
-      const dtype = d.arr ? "Array<" + ty + ">" : ty;
-      return "var " + d.id + ":" + dtype + (d.init ? " = " + d.init : "");
-    }).join(", ");
+    let out = mapType(t) + ws1 + head;
+    for (let t of tail) { out += t[0] + "," + t[2] + t[3]; }
+    return out;
   }
 
-/* ===================================================== */
-/* switch */
-/* ===================================================== */
-
 SwitchStmt
-  =
-  "switch"
-  _
-  "("
-  _
-  expr:Expression
-  _
-  ")"
-  _
-  "{"
-  _
-  cases:(CaseClause _)*
-  "}"
+  = "switch" ws1:_ "(" ws2:_ expr:Expression ws3:_ ")" ws4:_ "{" ws5:_ cases:(CaseClause)* "}" ws6:_
   {
-    return "switch(" + expr + "){\n" + cases.map(x => x[0]).join("") + "\n}";
+    return "switch" + ws1 + "(" + ws2 + expr + ws3 + ")" + ws4 + "{" + ws5 + cases.join("") + "}" + ws6;
   }
 
 CaseClause
-  =
-  "case"
-  __
-  v:Expression
-  ":"
-  _
-  body:((Statement _)+)?
-  {
-    return "case " + v + ":\n" + (body ? body.map(x => x[0]).join("") : "");
-  }
-  /
-  "default"
-  ":"
-  _
-  body:((Statement _)+)?
-  {
-    return "default:\n" + (body ? body.map(x => x[0]).join("") : "");
-  }
+  = "case" ws1:__ v:Expression ws2:_ ":" ws3:_ stmts:(Statement)*
+  { return "case" + ws1 + v + ws2 + ":" + ws3 + stmts.join(""); }
+  / "default" ws1:_ ":" ws2:_ stmts:(Statement)*
+  { return "default" + ws1 + ":" + ws2 + stmts.join(""); }
 
 /* ===================================================== */
-/* return / assignment */
+/* Single Statements */
 /* ===================================================== */
 
 ReturnStmt
-  =
-  "return"
-  _
-  expr:Expression?
-  _
-  ";"
-  {
-    return "return " + (expr||"") + ";";
-  }
+  = "return" ws1:__ expr:Expression ws2:_ ";" ws3:_
+  { return "return" + ws1 + expr + ws2 + ";" + ws3; }
+  / "return" ws1:_ ";" ws2:_
+  { return "return" + ws1 + ";" + ws2; }
+
+BreakStmt
+  = "break" ws1:_ ";" ws2:_ { return "break" + ws1 + ";" + ws2; }
+
+ContinueStmt
+  = "continue" ws1:_ ";" ws2:_ { return "continue" + ws1 + ";" + ws2; }
 
 AssignmentStmt
-  =
-  e:AssignmentExpr
-  _
-  ";"
-  { return e + ";"; }
+  = e:AssignmentExpr ws1:_ ";" ws2:_
+  { return e + ws1 + ";" + ws2; }
 
-AssignmentExpr
-  =
-  lhs:Assignable
-  _
-  op:AssignOp
-  _
-  rhs:Expression
-  {
-    return lhs + " " + op + " " + rhs;
-  }
-
-AssignOp
-  =
-  "+=" / "-=" / "*=" / "/=" / "^=" / ">>=" / "<<=" / "&=" / "|=" / "="
+ExprStmt
+  = expr:Expression ws1:_ ";" ws2:_
+  { return expr + ws1 + ";" + ws2; }
 
 /* ===================================================== */
-/* EXPRESSIONS */
+/* Expressions & Operators */
 /* ===================================================== */
 
 Expression = Ternary
 
 Ternary
-  =
-  cond:LogicalOr
-  _
-  "?"
-  _
-  ifTrue:Expression
-  _
-  ":"
-  _
-  ifFalse:Expression
-  {
-    return cond + " ? " + ifTrue + " : " + ifFalse;
-  }
+  = cond:LogicalOr ws1:_ "?" ws2:_ ifTrue:Expression ws3:_ ":" ws4:_ ifFalse:Expression
+  { return cond + ws1 + "?" + ws2 + ifTrue + ws3 + ":" + ws4 + ifFalse; }
   / LogicalOr
 
-LogicalOr
-  =
-  l:LogicalAnd
-  tail:(_ "||" _ LogicalAnd)*
-  { return tail.reduce((a,t)=>a+" || "+t[3], l); }
+LogicalOr  = l:LogicalAnd tail:(ws1:_ "||" ws2:_ LogicalAnd)* { return tail.reduce((a,t)=>a+t[0]+"||"+t[2]+t[3], l); }
+LogicalAnd = l:BitwiseOr tail:(ws1:_ "&&" ws2:_ BitwiseOr)* { return tail.reduce((a,t)=>a+t[0]+"&&"+t[2]+t[3], l); }
+BitwiseOr  = l:BitwiseXor tail:(ws1:_ "|" ws2:_ BitwiseXor)* { return tail.reduce((a,t)=>a+t[0]+"|"+t[2]+t[3], l); }
+BitwiseXor = l:BitwiseAnd tail:(ws1:_ "^" ws2:_ BitwiseAnd)* { return tail.reduce((a,t)=>a+t[0]+"^"+t[2]+t[3], l); }
+BitwiseAnd = l:Equality tail:(ws1:_ "&" ws2:_ Equality)* { return tail.reduce((a,t)=>a+t[0]+"&"+t[2]+t[3], l); }
 
-LogicalAnd
-  =
-  l:BitwiseOr
-  tail:(_ "&&" _ BitwiseOr)*
-  { return tail.reduce((a,t)=>a+" && "+t[3], l); }
-
-BitwiseOr
-  =
-  l:BitwiseXor
-  tail:(_ "|" _ BitwiseXor)*
-  { return tail.reduce((a,t)=>a+" | "+t[3], l); }
-
-BitwiseXor
-  =
-  l:BitwiseAnd
-  tail:(_ "^" _ BitwiseAnd)*
-  { return tail.reduce((a,t)=>a+" ^ "+t[3], l); }
-
-BitwiseAnd
-  =
-  l:Equality
-  tail:(_ "&" _ Equality)*
-  { return tail.reduce((a,t)=>a+" & "+t[3], l); }
-
-Equality
-  =
-  l:Comparison
-  tail:(_ ("=="/"!=") _ Comparison)*
-  { return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l); }
-
-Comparison
-  =
-  l:Shift
-  tail:(_ ("<="/">="/"<"/">") _ Shift)*
-  { return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l); }
-
-Shift
-  =
-  l:AddSub
-  tail:(_ ("<<"/">>") _ AddSub)*
-  { return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l); }
-
-AddSub
-  =
-  l:MulDiv
-  tail:(_ ("+"/"-") _ MulDiv)*
-  { return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l); }
-
-MulDiv
-  =
-  l:Unary
-  tail:(_ ("*" / "/" / "%") _ Unary)*
-  { return tail.reduce((a,t)=>a+" "+t[1]+" "+t[3], l); }
-
-Postfix
-  =
-  base:Primary
-  op:("++" / "--")
-  { return base + op; }
-  / Primary
+Equality   = l:Comparison tail:(ws1:_ op:("=="/"!=") ws2:_ Comparison)* { return tail.reduce((a,t)=>a+t[0]+t[1]+t[2]+t[3], l); }
+Comparison = l:Shift tail:(ws1:_ op:("<="/">="/"<"/">") ws2:_ Shift)* { return tail.reduce((a,t)=>a+t[0]+t[1]+t[2]+t[3], l); }
+Shift      = l:AddSub tail:(ws1:_ op:("<<"/">>") ws2:_ AddSub)* { return tail.reduce((a,t)=>a+t[0]+t[1]+t[2]+t[3], l); }
+AddSub     = l:MulDiv tail:(ws1:_ op:("+"/"-") ws2:_ MulDiv)* { return tail.reduce((a,t)=>a+t[0]+t[1]+t[2]+t[3], l); }
+MulDiv     = l:Unary tail:(ws1:_ op:("*" / "/" / "%") ws2:_ Unary)* { return tail.reduce((a,t)=>a+t[0]+t[1]+t[2]+t[3], l); }
 
 Unary
-  =
-  "++" _ v:Unary { return "++"+v; }
-  / "--" _ v:Unary { return "--"+v; }
-  / "!" _ v:Unary { return "!"+v; }
-  / "-" _ v:Unary { return "-"+v; }
+  = op:("++" / "--" / "!" / "-" / "~" / "+") ws1:_ v:Unary { return op + ws1 + v; }
   / Postfix
 
+Postfix
+  = base:Primary tail:(ws1:_ part:(AccessPart / "++" / "--") { return ws1 + part; })*
+  {
+    return base + tail.join("");
+  }
+
 Primary
-  =
-  base:(
-      "true" { return "true"; }
-    / "false" { return "false"; }
-    / "(" _ e:Expression _ ")" { return "(" + e + ")"; }
-    / ArrayConstructor
-    / TypeConstructor
-    / FuncCall
-    / Number
-    / id:Identifier { return mapVariable(id); }
-  )
-  tail:(_ AccessPart)*
-  {
-    return tail.reduce((acc, t) => {
-      const p = t[1];
-      return p.type === "member"
-        ? acc + "." + p.name
-        : acc + "[" + p.index + "]";
-    }, base);
-  }
-
-ArrayConstructor
-  =
-  t:BaseType
-  _
-  "[" _ "]"
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
-  {
-    return "new Array<" + mapType(t) + ">(" + (args ? args.join(", ") : "") + ")";
-  }
-
-TypeConstructor
-  =
-  name:("uvec2"/"uvec3"/"uvec4"/"vec2"/"vec3"/"vec4"/"mat2"/"mat3"/"mat4")
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
-  {
-    return "new " + mapType(name) + "(" + (args ? args.join(", ") : "") + ")";
-  }
+  = "true" { return "true"; }
+  / "false" { return "false"; }
+  / "(" ws1:_ e:Expression ws2:_ ")" { return "(" + ws1 + e + ws2 + ")"; }
+  / ArrayConstructor
+  / TypeConstructor
+  / FuncCall
+  / Number
+  / id:Identifier { return mapIdentifier(id); }
 
 FuncCall
-  =
-  name:Identifier
-  _
-  "("
-  _
-  args:ArgList?
-  _
-  ")"
+  = name:Identifier ws1:_ "(" ws2:_ args:ArgList? ws3:_ ")"
   {
-    return mapFuncCall(name, args);
+    return mapFuncName(name) + ws1 + "(" + ws2 + (args || "") + ws3 + ")";
   }
 
 ArgList
-  =
-  head:Expression
-  tail:(_ "," _ Expression)*
+  = head:Expression tail:(ws1:_ "," ws2:_ Expression)*
   {
-    return [head].concat(tail.map(x=>x[3]));
+    return head + tail.map(t => t[0] + "," + t[2] + t[3]).join("");
   }
 
+ArrayConstructor
+  = t:BaseType ws1:_ "[" ws2:_ size:Expression? ws3:_ "]" ws4:_ "(" ws5:_ args:ArgList? ws6:_ ")"
+  {
+    return "{" + ws5 + (args || "") + ws6 + "}";
+  }
+
+TypeConstructor
+  = name:("uvec2"/"uvec3"/"uvec4"/"ivec2"/"ivec3"/"ivec4"/"bvec2"/"bvec3"/"bvec4"/"vec2"/"vec3"/"vec4"/"mat2"/"mat3"/"mat4") ws1:_ "(" ws2:_ args:ArgList? ws3:_ ")"
+  {
+    return mapType(name) + ws1 + "(" + ws2 + (args || "") + ws3 + ")";
+  }
+
+AssignmentExpr
+  = lhs:Assignable ws1:_ op:AssignOp ws2:_ rhs:Expression
+  {
+    return lhs + ws1 + op + ws2 + rhs;
+  }
+
+AssignOp = "+=" / "-=" / "*=" / "/=" / "%=" / "<<=" / ">>=" / "&=" / "^=" / "|=" / "="
+
 /* ===================================================== */
-/* assignables */
+/* Assignables & Accessors */
 /* ===================================================== */
 
 Assignable
-  =
-  base:Identifier
-  tail:(_ AccessPart)*
+  = base:Identifier tail:(ws1:_ part:AccessPart { return ws1 + part; })*
   {
-    const mappedBase = mapVariable(base);
-    return tail.reduce((acc,t)=>{
-      const p = t[1];
-      return p.type === "member"
-        ? acc + "." + p.name
-        : acc + "[" + p.index + "]";
-    }, mappedBase);
+    return mapIdentifier(base) + tail.join("");
   }
 
 AccessPart
-  =
-  "." name:Identifier { return {type:"member", name}; }
-  / "[" _ idx:Expression _ "]" { return {type:"index", index:idx}; }
-
-ExprStmt
-  =
-  expr:Expression _
-  ";"
-  { return expr + ";"; }
+  = "." ws1:_ name:Identifier { return "." + ws1 + name; }
+  / "[" ws1:_ idx:Expression ws2:_ "]" { return "[" + ws1 + idx + ws2 + "]"; }
 
 /* ===================================================== */
-/* types */
+/* Lexical Rules */
 /* ===================================================== */
 
 Type = BaseType
 
 BaseType
-  =
-  "float"
-  / "int"
-  / "uint"
-  / "bool"
-  / "vec2"
-  / "vec3"
-  / "vec4"
-  / "uvec2"
-  / "uvec3"
-  / "uvec4"
-  / "mat2"
-  / "mat3"
-  / "mat4"
-  / "void"
+  = "float" / "int" / "uint" / "bool" / "void"
+  / "vec2" / "vec3" / "vec4"
+  / "uvec2" / "uvec3" / "uvec4"
+  / "ivec2" / "ivec3" / "ivec4"
+  / "bvec2" / "bvec3" / "bvec4"
+  / "mat2" / "mat3" / "mat4"
   / Identifier
 
-ArraySuffix = "[" _ e:Expression? _ "]" { return "[" + (e ? e : "") + "]"; }
+ArraySuffix = "[" ws1:_ e:Expression? ws2:_ "]" { return "[" + ws1 + (e ? e : "") + ws2 + "]"; }
 
 Identifier = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
-  =
-  num:$(
-      (
-        [0-9]+ "." [0-9]*
-      / "." [0-9]+
-      / [0-9]+
-      )
-      ([eE] [+\-]? [0-9]+)?
-  )
-  suffix:([fFuU])?
-  {
-    // Strip trailing 'u' and 'f' as Haxe exclusively relies on base variable typing 
-    return num;
-  }
+  = $( ( [0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+ ) ([eE] [+\-]? [0-9]+)? [fFuU]? )
 
 /* ===================================================== */
-/* whitespace */
+/* Whitespace & Comments */
 /* ===================================================== */
 
-_  = ( [ \t\r\n] / Comment )*
-__ = ( [ \t\r\n] / Comment )+
+_ "optional whitespace"
+  = ([ \t\r\n] / Comment)* { return text(); }
+
+__ "mandatory whitespace"
+  = ([ \t\r\n] / Comment)+ { return text(); }
+
+Comment
+  = SingleLineComment
+  / MultiLineComment
+
+SingleLineComment
+  = "//" [^\r\n]*
+
+MultiLineComment
+  = "/*" (!"*/" .)* "*/"
