@@ -44,7 +44,6 @@
   }
 
   function mapFuncName(name) {
-    // Translate specific GLSL built-ins to Slang equivalents
     if (name === "mix") return "lerp";
     if (name === "fract") return "frac";
     if (name === "mod") return "fmod";
@@ -52,6 +51,18 @@
     
     if (glslBuiltins.has(name)) return name;
     return mapIdentifier(name);
+  }
+
+  // Processes raw macro strings to ensure trapped GLSL tokens translate to Slang
+  function processMacro(directive) {
+    return directive.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)\b/g, (match) => {
+      if (match === "mix") return "lerp";
+      if (match === "fract") return "frac";
+      if (match === "mod") return "fmod";
+      if (match === "inversesqrt") return "rsqrt";
+      if (typeMap[match]) return typeMap[match];
+      return match;
+    });
   }
 }
 
@@ -92,8 +103,13 @@ Statement
 /* ===================================================== */
 
 PreprocessorDirective
-  = directive:$([ \t]* "#" ( "\\" . / [^\r\n] )*) ws:_
-  { return directive + ws; }
+  = directive:$(
+      [ \t]* "#" 
+      ( "\\" ("\r\n" / [\n\r]) / [^\r\n] )*
+    ) ws:_
+  { 
+    return processMacro(directive) + ws; 
+  }
 
 /* ===================================================== */
 /* Structs */
