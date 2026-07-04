@@ -25,21 +25,24 @@
 
   // Appends/prepends 'compiled_' to user-defined variables
   function mapVariable(name) {
-    const builtinVars = {
-      "gl_Position": "gl_Position",
-      "gl_FragColor": "gl_FragColor",
-      "gl_FragCoord": "gl_FragCoord",
-      "gl_FrontFacing": "gl_FrontFacing",
-      "gl_PointSize": "gl_PointSize",
-      "gl_VertexID": "gl_VertexID",
-      "gl_InstanceID": "gl_InstanceID"
-    };
-    return builtinVars[name] || "compiled_" + name;
+    const builtinVars = new Set([
+      "gl_Position", "gl_FragColor", "gl_FragCoord",
+      "gl_FrontFacing", "gl_PointSize", "gl_VertexID", "gl_InstanceID",
+      "true", "false",
+      "x", "y", "z", "w", "r", "g", "b", "a", "s", "t", "p", "q"
+    ]);
+    
+    // Skip vector swizzling (e.g., .xyz, .rgba)
+    if (/^[xyzw]{2,4}$/.test(name) || /^[rgba]{2,4}$/.test(name) || /^[stpq]{2,4}$/.test(name)) {
+      return name;
+    }
+    
+    return builtinVars.has(name) ? name : "compiled_" + name;
   }
 
   // Appends/prepends 'compiled_' to user-defined functions and structs
   function mapName(name) {
-    return "compiled_" + name;
+    return name.startsWith("compiled_") ? name : "compiled_" + name;
   }
 
   // Helper to manage Python's semantic indentation
@@ -199,9 +202,9 @@ StructDecl
 
 StructField
   =
-  w:_ t:Type ws1:__ id:Identifier ws2:_ ";"
+  w:_ t:Type ws1:__ id:Identifier ws2:_ arr:ArraySuffix? ws3:_ ";"
   {
-    return { id: mapVariable(id), type: mapType(t), comments: w + ws1 + ws2 };
+    return { id: mapVariable(id), type: mapType(t), comments: w + ws1 + ws2 + ws3 };
   }
 
 /* ===================================================== */
@@ -617,6 +620,8 @@ Number
   )
   suffix:([fFuU]+)?
   {
+    // Stripping f/F/u/U suffixes because standard Python doesn't utilize them.
+    // Handles 1., .3, and standard forms.
     return num;
   }
 
