@@ -115,11 +115,6 @@ FunctionBody
               let tRet = stmt.trueBlock.returnExpr;
               let fRet = stmt.falseBlock ? stmt.falseBlock.returnExpr : returnExpr;
               if (tRet !== "()") returnExpr = (stmt.comment || "") + `(ite ${stmt.cond} ${tRet} ${fRet})`;
-              if (stmt.trueBlock.locals) locals.push(...stmt.trueBlock.locals);
-              if (stmt.falseBlock && stmt.falseBlock.locals) locals.push(...stmt.falseBlock.locals);
-          } else if (stmt.type === "Switch") {
-              if (stmt.returnExpr !== "()") returnExpr = (stmt.comment || "") + stmt.returnExpr;
-              if (stmt.locals) locals.push(...stmt.locals);
           }
       });
       
@@ -127,43 +122,13 @@ FunctionBody
     }
 
 Statement
-  = comments:_ stmt:(TypelessConstDecl / LocalVarDecl / AssignmentStmt / IfStmt / SwitchStmt / ReturnStmt / BreakStmt) {
+  = comments:_ stmt:(TypelessConstDecl / LocalVarDecl / AssignmentStmt / IfStmt / ReturnStmt) {
       if (Array.isArray(stmt)) {
           if (stmt.length > 0) stmt[0].comment = comments + (stmt[0].comment || "");
       } else {
           stmt.comment = comments + (stmt.comment || "");
       }
       return stmt;
-  }
-
-SwitchStmt
-  = "switch" ws1:_ "(" ws2:_ cond:Expression ws3:_ ")" ws4:_ "{" ws5:_ cases:SwitchCase* defaultCase:SwitchDefault? trailing:_ "}" {
-      let result = defaultCase ? defaultCase.body.returnExpr : "()";
-      let locals = [];
-      if (defaultCase && defaultCase.body.locals) locals.push(...defaultCase.body.locals);
-      
-      for (let i = cases.length - 1; i >= 0; i--) {
-          let c = cases[i];
-          result = `(ite (= ${cond} ${c.val}) ${c.body.returnExpr} ${result})`;
-          if (c.body.locals) locals.push(...c.body.locals);
-      }
-      
-      return {
-          type: "Switch",
-          comment: ws1 + ws2 + ws3 + ws4 + ws5,
-          returnExpr: result,
-          locals: locals
-      };
-  }
-
-SwitchCase
-  = "case" ws1:__ val:Expression ws2:_ ":" ws3:_ body:FunctionBody {
-      return { val: val, body: body, comment: ws1 + ws2 + ws3 };
-  }
-
-SwitchDefault
-  = "default" ws1:_ ":" ws2:_ body:FunctionBody {
-      return { body: body, comment: ws1 + ws2 };
   }
 
 IfStmt
@@ -178,11 +143,6 @@ IfStmt
          trueBlock: trueBlock,
          falseBlock: falseBlock ? falseBlock[6] : null
       };
-  }
-
-BreakStmt
-  = "break" ws1:_ ";" ws2:_ {
-      return { type: "Break", comment: ws1 + ws2 };
   }
 
 TypelessConstDecl
