@@ -2,6 +2,7 @@
   const typeMap = {
     float: "float32", int: "int32", uint: "uint32", bool: "bool",
     vec2: "Vector2", vec3: "Vector3", vec4: "Vector4",
+    uvec2: "UVector2", uvec3: "UVector3", uvec4: "UVector4",
     mat2: "Matrix2", mat3: "Matrix3", mat4: "Matrix4", void: ""
   };
 
@@ -64,6 +65,7 @@
 
       // Constructors and User-Defined
       case "vec2": case "vec3": case "vec4":
+      case "uvec2": case "uvec3": case "uvec4":
       case "mat2": case "mat3": case "mat4":
         return `${mapType(name)}{${safeArgs.join(", ")}}`;
       default:
@@ -199,7 +201,6 @@ SwitchStmt
 
 CaseClause
   = "case" __ v:Expression ":" _ body:((Statement _)+)? {
-      // Strips trailing 'break;' or 'break' logic, mapping perfectly to idiomatic Go
       const stmts = body ? body.map(x => x[0].replace(/break\s*;?\s*$/, "") + x[1]).join("") : "";
       return `case ${v}:\n${stmts}`;
   }
@@ -234,7 +235,7 @@ AssignmentExpr
   = lhs:Assignable _ op:AssignOp _ rhs:AssignmentExpr { return `${lhs} ${op} ${rhs}`; } 
   / Ternary
 
-AssignOp = "+=" / "-=" / "*=" / "/=" / "="
+AssignOp = "+=" / "-=" / "*=" / "/=" / "%=" / "&=" / "|=" / "^=" / "<<=" / ">>=" / "="
 
 Ternary
   = cond:LogicalOr _ "?" _ t:Expression _ ":" _ f:Expression { return `glmath.Ternary(${cond}, ${t}, ${f})`; } 
@@ -244,13 +245,25 @@ LogicalOr
   = head:LogicalAnd tail:(_ "||" _ LogicalAnd)* { return tail.reduce((a, t) => `${a} || ${t[3]}`, head); }
 
 LogicalAnd
-  = head:Equality tail:(_ "&&" _ Equality)* { return tail.reduce((a, t) => `${a} && ${t[3]}`, head); }
+  = head:BitwiseOr tail:(_ "&&" _ BitwiseOr)* { return tail.reduce((a, t) => `${a} && ${t[3]}`, head); }
+
+BitwiseOr
+  = head:BitwiseXor tail:(_ "|" _ BitwiseXor)* { return tail.reduce((a, t) => `${a} | ${t[3]}`, head); }
+
+BitwiseXor
+  = head:BitwiseAnd tail:(_ "^" _ BitwiseAnd)* { return tail.reduce((a, t) => `${a} ^ ${t[3]}`, head); }
+
+BitwiseAnd
+  = head:Equality tail:(_ "&" _ Equality)* { return tail.reduce((a, t) => `${a} & ${t[3]}`, head); }
 
 Equality
   = head:Relational tail:(_ ("=="/"!=") _ Relational)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
 
 Relational
-  = head:Additive tail:(_ ("<="/">="/"<"/">") _ Additive)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
+  = head:Shift tail:(_ ("<="/">="/"<"/">") _ Shift)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
+
+Shift
+  = head:Additive tail:(_ ("<<"/">>") _ Additive)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
 
 Additive
   = head:Multiplicative tail:(_ ("+"/"-") _ Multiplicative)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
@@ -259,7 +272,7 @@ Multiplicative
   = head:Unary tail:(_ ("*"/"/"/"%") _ Unary)* { return tail.reduce((a, t) => `${a} ${t[1]} ${t[3]}`, head); }
 
 Unary
-  = op:("++"/"--"/"!"/"-") _ e:Unary { return `${op}${e}`; } 
+  = op:("++"/"--"/"!"/"~"/"-") _ e:Unary { return `${op === '~' ? '^' : op}${e}`; } 
   / Postfix
 
 Postfix
@@ -293,13 +306,12 @@ Assignable
 /* ===================================================== */
 
 Type
-  = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "mat2" / "mat3" / "mat4" / "void" / Identifier
+  = "float" / "int" / "uint" / "bool" / "vec2" / "vec3" / "vec4" / "uvec2" / "uvec3" / "uvec4" / "mat2" / "mat3" / "mat4" / "void" / Identifier
 
 Identifier = $([a-zA-Z_][a-zA-Z0-9_]*)
 
 Number
   = $([0-9]+ "." [0-9]* / "." [0-9]+ / [0-9]+) $([eE][+-]?[0-9]+)? $[fFuU]? {
-      // Safely strips C/GLSL float suffixes and guarantees valid Go decimals
       let txt = text().replace(/[fFuU]$/i, '');
       if (txt.startsWith('.')) txt = '0' + txt;
       if (txt.endsWith('.')) txt = txt + '0';
